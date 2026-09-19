@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
 import type { Role } from '../types'
 import LogoMark from '../components/ui/LogoMark'
@@ -66,6 +66,7 @@ export default function Login({ onLogin }: LoginProps) {
   const [error, setError] = useState('')
   const [step, setStep] = useState<'login' | 'set-password' | 'forgot' | 'reset-sent'>('login')
   const [checkingSession, setCheckingSession] = useState(true)
+  const loginStartedRef = useRef(false)
 
   // Set-password state — used for BOTH first-time invite links and
   // forgot-password recovery links. Supabase delivers both as the same
@@ -160,9 +161,14 @@ export default function Login({ onLogin }: LoginProps) {
 
     // Normal flow — no recovery hash or code in URL
     supabase.auth.getSession().then(({ data }) => {
-      if (!active) return
+      if (!active || loginStartedRef.current) return
+
       if (data.session) {
-        completeLogin().finally(() => { if (active) setCheckingSession(false) })
+        completeLogin().finally(() => {
+          if (active && !loginStartedRef.current) {
+            setCheckingSession(false)
+          }
+        })
       } else {
         setCheckingSession(false)
       }
@@ -187,6 +193,10 @@ export default function Login({ onLogin }: LoginProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    // Cancel any in-progress session restoration.
+    loginStartedRef.current = true
+
     setError('')
     if (!selectedRole) { setError('Please select your role first.'); return }
     setLoading(true)
@@ -462,8 +472,8 @@ export default function Login({ onLogin }: LoginProps) {
             >
               {loading ? (
                 <><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                 </svg> Signing in…</>
               ) : 'Continue'}
             </button>
