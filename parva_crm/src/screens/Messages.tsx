@@ -3,16 +3,54 @@ import { Send, ArrowLeft, Search, Paperclip, FileText, X as XIcon, MessageCircle
 import { useData } from '../contexts/DataContext'
 import CallModal from '../components/ui/CallModal'
 import Modal from '../components/ui/Modal'
-import type { Role, Message, CallLog, InternalEmail, Group, GroupMessage } from '../types'
+import type { Role, CallLog, InternalEmail } from '../types'
+import {
+  loadChatState,
+  getOrCreateDirectConversation,
+  createGroupConversation,
+  sendMessage as saveMessage,
+  subscribeToChat,
+  type ChatState,
+  type ChatGroup,
+  type ChatMessageRow,
+} from '../services/chatService'
 import type { Dispatch, SetStateAction } from 'react'
 
 type Tab = 'chat' | 'calls' | 'email'
 
-export const currentUserByRole: Record<Role, string> = {
-  agent: 'emp-nagesh',
-  manager: 'emp-nagesh',
-  admin: 'emp-chaitra',
+type UiMessage = {
+  id: string
+  senderId: string
+  recipientId?: string
+  text: string
+  timestamp: string
+  read: boolean
+  attachmentName?: string
+  attachmentUrl?: string
 }
+
+type UiGroupMessage = UiMessage & {
+  groupId: string
+  readBy: string[]
+}
+
+type UiConversation = {
+  contact: any
+  thread: UiMessage[]
+  last?: UiMessage
+  unread: number
+}
+
+type UiGroupConversation = {
+  group: ChatGroup
+  thread: UiGroupMessage[]
+  last?: UiGroupMessage
+  unread: number
+}
+
+// Kept exported only for backward compatibility with any old import.
+// Authentication now supplies the real employee ID; no employee ID is hardcoded here.
+export const currentUserByRole: Record<Role, string> = {} as Record<Role, string>
 
 function initials(name: string) {
   return name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
@@ -34,37 +72,50 @@ function formatDuration(sec: number) {
 
 interface MessagesProps {
   role: Role
-  currentUserId?: string
+  currentUserId: string
   initialContactId?: string
   initialGroupId?: string
-  groupList: Group[]
-  setGroupList: Dispatch<SetStateAction<Group[]>>
-  msgs: Message[]
-  setMsgs: Dispatch<SetStateAction<Message[]>>
-  callLogsList: CallLog[]
-  setCallLogsList: Dispatch<SetStateAction<CallLog[]>>
-  emailsList: InternalEmail[]
-  setEmailsList: Dispatch<SetStateAction<InternalEmail[]>>
-  groupMsgsList: GroupMessage[]
-  setGroupMsgsList: Dispatch<SetStateAction<GroupMessage[]>>
+  // These props are retained so App.tsx does not need a large UI rewrite.
+  groupList?: any[]
+  setGroupList?: Dispatch<SetStateAction<any[]>>
+  msgs?: any[]
+  setMsgs?: Dispatch<SetStateAction<any[]>>
+  callLogsList?: CallLog[]
+  setCallLogsList?: Dispatch<SetStateAction<CallLog[]>>
+  emailsList?: InternalEmail[]
+  setEmailsList?: Dispatch<SetStateAction<InternalEmail[]>>
+  groupMsgsList?: any[]
+  setGroupMsgsList?: Dispatch<SetStateAction<any[]>>
 }
 
-export default function Messages({ role, currentUserId: propUserId, initialContactId, initialGroupId, groupList, setGroupList, msgs, setMsgs, callLogsList, setCallLogsList, emailsList, setEmailsList, groupMsgsList, setGroupMsgsList }: MessagesProps) {
+export default function Messages({
+  role,
+  currentUserId,
+  initialContactId,
+  initialGroupId,
+  callLogsList = [],
+  setCallLogsList = () => { },
+  emailsList = [],
+  setEmailsList = () => { },
+}: MessagesProps) {
   const { employees } = useData()
-  const currentUserId = propUserId || currentUserByRole[role]
   const [search, setSearch] = useState('')
   const [draft, setDraft] = useState('')
   const [pendingAttachment, setPendingAttachment] = useState<{ name: string; url: string } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [chatState, setChatState] = useState<ChatState>({ messages: [], conversations: [], members: [], groups: [] })
+  const [chatLoading, setChatLoading] = useState(true)
+  const [chatError, setChatError] = useState('')
 
-  // Use lifted state from props so messages persist across user switches
   const callLogs = callLogsList
-  const setCallLogs = setCallLogsList
+  const setCallLogs = (value: SetStateAction<CallLog[]>) => {
+    if (setCallLogsList) setCallLogsList(value)
+  }
   const emails = emailsList
-  const setEmails = setEmailsList
-  const groupMsgs = groupMsgsList
-  const setGroupMsgs = setGroupMsgsList
+  const setEmails = (value: SetStateAction<InternalEmail[]>) => {
+    if (setEmailsList) setEmailsList(value)
+  }
 
   const [tab, setTab] = useState<Tab>('chat')
   const [activeCallWith, setActiveCallWith] = useState<string | null>(null)
@@ -80,24 +131,92 @@ export default function Messages({ role, currentUserId: propUserId, initialConta
   const [newGroupName, setNewGroupName] = useState('')
   const [newGroupMembers, setNewGroupMembers] = useState<Set<string>>(new Set())
 
+  const reloadChat = async () => {
+    if (!currentUserId) return
+    try {
+      setChatError('')
+      const next = await loadChatState(currentUserId)
+      setChatState(next)
+    } catch (error) {
+      console.error('Could not load chat:', error)
+      setChatError(error instanceof Error ? error.message : 'Could not load messages.')
+    } finally {
+      setChatLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    let active = true
+    setChatLoading(true)
+    setChatError('')
+
+    void loadChatState(currentUserId)
+      .then((next) => {
+        if (active) setChatState(next)
+      })
+      .catch((error) => {
+        if (active) {
+          console.error('Could not load chat:', error)
+          setChatError(error instanceof Error ? error.message : 'Could not load messages.')
+        }
+      })
+      .finally(() => {
+        if (active) setChatLoading(false)
+      })
+
+    const unsubscribe = subscribeToChat(() => {
+      void loadChatState(currentUserId)
+        .then((next) => {
+          if (active) setChatState(next)
+        })
+        .catch((error) => console.error('Realtime chat reload failed:', error))
+    })
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [currentUserId])
+
   const contacts = useMemo(
-    () => employees.filter((e) => e.id !== currentUserId),
-    [currentUserId]
+    () => employees.filter((e: any) => e.id !== currentUserId && e.status !== 'inactive'),
+    [employees, currentUserId]
   )
 
-  const conversations = useMemo(() => {
+  const directConversationFor = (contactId: string) =>
+    chatState.conversations.find((conversation) =>
+      conversation.type === 'direct' &&
+      chatState.members.some((m) => m.conversation_id === conversation.id && m.employee_id === currentUserId) &&
+      chatState.members.some((m) => m.conversation_id === conversation.id && m.employee_id === contactId)
+    )
+
+  const toUiMessage = (row: ChatMessageRow, recipientId?: string): UiMessage => ({
+    id: row.id,
+    senderId: row.sender_id,
+    recipientId,
+    text: row.body || '',
+    timestamp: row.created_at,
+    read: true,
+    attachmentName: row.attachment_name || undefined,
+    attachmentUrl: row.attachment_url || undefined,
+  })
+
+  const conversations = useMemo<UiConversation[]>(() => {
     return contacts
-      .map((contact) => {
-        const thread = (msgs ?? [])
-          .filter(
-            (m) =>
-              (m.senderId === currentUserId && m.recipientId === contact.id) ||
-              (m.senderId === contact.id && m.recipientId === currentUserId)
-          )
-          .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+      .map((contact: any) => {
+        const conversation = chatState.conversations.find((c) =>
+          c.type === 'direct' &&
+          chatState.members.some((m) => m.conversation_id === c.id && m.employee_id === currentUserId) &&
+          chatState.members.some((m) => m.conversation_id === c.id && m.employee_id === contact.id)
+        )
+        const thread = conversation
+          ? chatState.messages
+            .filter((m) => m.conversation_id === conversation.id)
+            .sort((a, b) => a.created_at.localeCompare(b.created_at))
+            .map((m) => toUiMessage(m, m.sender_id === currentUserId ? contact.id : currentUserId))
+          : []
         const last = thread[thread.length - 1]
-        const unread = thread.filter((m) => m.recipientId === currentUserId && !m.read).length
-        return { contact, thread, last, unread }
+        return { contact, thread, last, unread: 0 }
       })
       .filter((c) => !search || c.contact.name.toLowerCase().includes(search.toLowerCase()))
       .sort((a, b) => {
@@ -106,17 +225,17 @@ export default function Messages({ role, currentUserId: propUserId, initialConta
         if (!b.last) return -1
         return b.last.timestamp.localeCompare(a.last.timestamp)
       })
-  }, [contacts, msgs, currentUserId, search])
+  }, [contacts, chatState, currentUserId, search])
 
-  const myGroups = useMemo(() => groupList.filter((g) => g.memberIds.includes(currentUserId)), [groupList, currentUserId])
-
-  const groupConversations = useMemo(() => {
-    return myGroups
+  const groupConversations = useMemo<UiGroupConversation[]>(() => {
+    return chatState.groups
       .map((group) => {
-        const thread = groupMsgs.filter((m) => m.groupId === group.id).sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+        const thread = chatState.messages
+          .filter((m) => chatState.members.some((member) => member.conversation_id === group.id && member.employee_id === currentUserId) && m.conversation_id === group.id)
+          .sort((a, b) => a.created_at.localeCompare(b.created_at))
+          .map((m) => ({ ...toUiMessage(m), groupId: group.id, readBy: [m.sender_id] }))
         const last = thread[thread.length - 1]
-        const unread = thread.filter((m) => m.senderId !== currentUserId && !m.readBy.includes(currentUserId)).length
-        return { group, thread, last, unread }
+        return { group, thread, last, unread: 0 }
       })
       .filter((g) => !search || g.group.name.toLowerCase().includes(search.toLowerCase()))
       .sort((a, b) => {
@@ -125,22 +244,17 @@ export default function Messages({ role, currentUserId: propUserId, initialConta
         if (!b.last) return -1
         return b.last.timestamp.localeCompare(a.last.timestamp)
       })
-  }, [myGroups, groupMsgs, currentUserId, search])
+  }, [chatState, currentUserId, search])
 
-  const [selectedId, setSelectedId] = useState<string | null>(
-    () => initialContactId ?? conversations.find((c) => c.last)?.contact.id ?? null
-  )
+  const [selectedId, setSelectedId] = useState<string | null>(initialContactId ?? initialGroupId ?? null)
   const selected = conversations.find((c) => c.contact.id === selectedId)
   const selectedGroupConvo = groupConversations.find((g) => g.group.id === selectedId)
 
   useEffect(() => {
     if (initialContactId) {
       setSelectedId(initialContactId)
-      setMsgs((prev) =>
-        prev.map((m) => (m.senderId === initialContactId && m.recipientId === currentUserId ? { ...m, read: true } : m))
-      )
+      setTab('chat')
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialContactId])
 
   useEffect(() => {
@@ -148,8 +262,13 @@ export default function Messages({ role, currentUserId: propUserId, initialConta
       setSelectedId(initialGroupId)
       setTab('chat')
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialGroupId])
+
+  useEffect(() => {
+    if (!selectedId && conversations.length > 0 && window.innerWidth >= 1024) {
+      setSelectedId(null)
+    }
+  }, [selectedId, conversations.length])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
@@ -169,49 +288,39 @@ export default function Messages({ role, currentUserId: propUserId, initialConta
   const openConversation = (contactId: string) => {
     setSelectedId(contactId)
     setTab('chat')
-    setMsgs((prev) =>
-      prev.map((m) => (m.senderId === contactId && m.recipientId === currentUserId ? { ...m, read: true } : m))
-    )
   }
 
   const openGroup = (groupId: string) => {
     setSelectedId(groupId)
     setTab('chat')
-    setGroupMsgs((prev) =>
-      prev.map((m) => (m.groupId === groupId && !m.readBy.includes(currentUserId) ? { ...m, readBy: [...m.readBy, currentUserId] } : m))
-    )
   }
 
-  const send = () => {
+  const send = async () => {
     if ((!draft.trim() && !pendingAttachment) || !selectedId) return
 
-    if (selectedGroupConvo) {
-      const newMsg: GroupMessage = {
-        id: `gmsg-${Date.now()}`,
-        groupId: selectedId,
-        senderId: currentUserId,
-        text: draft.trim(),
-        timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
-        readBy: [currentUserId],
-        attachmentName: pendingAttachment?.name,
-        attachmentUrl: pendingAttachment?.url,
+    try {
+      setChatError('')
+      let conversationId = selectedGroupConvo?.group.id
+
+      if (!conversationId) {
+        conversationId = await getOrCreateDirectConversation(selectedId)
       }
-      setGroupMsgs((prev) => [...prev, newMsg])
-    } else {
-      const newMsg: Message = {
-        id: `msg-${Date.now()}`,
-        senderId: currentUserId,
-        recipientId: selectedId,
-        text: draft.trim(),
-        timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
-        read: true,
-        attachmentName: pendingAttachment?.name,
-        attachmentUrl: pendingAttachment?.url,
-      }
-      setMsgs((prev) => [...prev, newMsg])
+
+      await saveMessage(
+        conversationId,
+        currentUserId,
+        draft.trim(),
+        pendingAttachment?.name,
+        pendingAttachment?.url,
+      )
+
+      setDraft('')
+      setPendingAttachment(null)
+      await reloadChat()
+    } catch (error) {
+      console.error('Could not send message:', error)
+      setChatError(error instanceof Error ? error.message : 'Could not send message.')
     }
-    setDraft('')
-    setPendingAttachment(null)
   }
 
   const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -225,7 +334,7 @@ export default function Messages({ role, currentUserId: propUserId, initialConta
 
   const endCall = (durationSec: number) => {
     if (activeCallGroupId) {
-      const group = groupList.find((g) => g.id === activeCallGroupId)
+      const group = chatState.groups.find((g) => g.id === activeCallGroupId)
       const newCall: CallLog = {
         id: `call-${Date.now()}`,
         callerId: currentUserId,
@@ -321,33 +430,30 @@ export default function Messages({ role, currentUserId: propUserId, initialConta
     })
   }
 
-  const createGroup = () => {
+  const createGroup = async () => {
     if (!newGroupName.trim() || newGroupMembers.size === 0) return
-    const group: Group = {
-      id: `group-${Date.now()}`,
-      name: newGroupName.trim(),
-      memberIds: [currentUserId, ...Array.from(newGroupMembers)],
-      createdBy: currentUserId,
-      createdAt: new Date().toISOString().slice(0, 10),
+    try {
+      setChatError('')
+      const memberIds = [currentUserId, ...Array.from(newGroupMembers)]
+      const groupId = await createGroupConversation(newGroupName.trim(), memberIds)
+      setNewGroupName('')
+      setNewGroupMembers(new Set())
+      setShowNewGroupModal(false)
+      await reloadChat()
+      setSelectedId(groupId)
+      setTab('chat')
+    } catch (error) {
+      console.error('Could not create group:', error)
+      setChatError(error instanceof Error ? error.message : 'Could not create group.')
     }
-    setGroupList((prev) => [...prev, group])
-    setNewGroupName('')
-    setNewGroupMembers(new Set())
-    setShowNewGroupModal(false)
-    setSelectedId(group.id)
-    setTab('chat')
   }
 
   const contactCallHistory = selectedId
-    ? callLogs
-        .filter((c) => (c.callerId === currentUserId && c.calleeId === selectedId) || (c.callerId === selectedId && c.calleeId === currentUserId))
-        .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    ? callLogs.filter((c) => (c.callerId === currentUserId && c.calleeId === selectedId) || (c.callerId === selectedId && c.calleeId === currentUserId)).sort((a, b) => b.timestamp.localeCompare(a.timestamp))
     : []
 
   const contactEmails = selectedId
-    ? emails
-        .filter((e) => (e.senderId === currentUserId && e.recipientId === selectedId) || (e.senderId === selectedId && e.recipientId === currentUserId))
-        .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    ? emails.filter((e) => (e.senderId === currentUserId && e.recipientId === selectedId) || (e.senderId === selectedId && e.recipientId === currentUserId)).sort((a, b) => b.timestamp.localeCompare(a.timestamp))
     : []
 
   const groupCallHistory = selectedGroupConvo
@@ -358,10 +464,10 @@ export default function Messages({ role, currentUserId: propUserId, initialConta
     ? emails.filter((e) => e.groupId === selectedGroupConvo.group.id).sort((a, b) => b.timestamp.localeCompare(a.timestamp))
     : []
 
-  const groupMemberNames = (group: Group) =>
+  const groupMemberNames = (group: ChatGroup) =>
     group.memberIds
       .filter((id) => id !== currentUserId)
-      .map((id) => employees.find((e) => e.id === id)?.name.split(' ')[0])
+      .map((id) => employees.find((e: any) => e.id === id)?.name?.split(' ')[0])
       .filter(Boolean)
       .join(', ')
 
@@ -525,83 +631,83 @@ export default function Messages({ role, currentUserId: propUserId, initialConta
             </div>
 
             {tab === 'chat' && (
-            <>
-            <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3" style={{ backgroundColor: '#FAF8F5' }}>
-              {selectedGroupConvo.thread.length === 0 && (
-                <p className="text-sm text-muted-foreground text-center mt-8">No messages yet — say hello 👋</p>
-              )}
-              {selectedGroupConvo.thread.map((m) => {
-                const mine = m.senderId === currentUserId
-                const sender = employees.find((e) => e.id === m.senderId)
-                return (
-                  <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
-                    <div
-                      className="max-w-[75%] sm:max-w-[60%] px-4 py-2.5 rounded-2xl text-sm"
-                      style={{
-                        backgroundColor: mine ? '#1C2B4A' : '#fff',
-                        color: mine ? '#FAF8F5' : '#1C2B4A',
-                        border: mine ? 'none' : '1px solid #E5DFD5',
-                        borderBottomRightRadius: mine ? 4 : undefined,
-                        borderBottomLeftRadius: !mine ? 4 : undefined,
-                      }}
-                    >
-                      {!mine && <p className="text-[11px] font-semibold mb-0.5" style={{ color: '#C9A96E' }}>{sender?.name}</p>}
-                      {m.attachmentUrl && (
-                        m.attachmentUrl.startsWith('data:image') ? (
-                          <img src={m.attachmentUrl} alt={m.attachmentName} className="rounded-lg mb-1.5 max-h-40 object-cover" />
-                        ) : (
-                          <div className="flex items-center gap-2 mb-1.5 px-2.5 py-2 rounded-lg" style={{ backgroundColor: mine ? 'rgba(255,255,255,0.1)' : '#F5F2EC' }}>
-                            <FileText size={14} />
-                            <span className="text-xs truncate">{m.attachmentName}</span>
-                          </div>
-                        )
-                      )}
-                      {m.text && <p className="leading-relaxed">{m.text}</p>}
-                      <p className="text-[10px] mt-1 opacity-60">{formatTime(m.timestamp)}</p>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+              <>
+                <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3" style={{ backgroundColor: '#FAF8F5' }}>
+                  {selectedGroupConvo.thread.length === 0 && (
+                    <p className="text-sm text-muted-foreground text-center mt-8">No messages yet — say hello 👋</p>
+                  )}
+                  {selectedGroupConvo.thread.map((m) => {
+                    const mine = m.senderId === currentUserId
+                    const sender = employees.find((e) => e.id === m.senderId)
+                    return (
+                      <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                        <div
+                          className="max-w-[75%] sm:max-w-[60%] px-4 py-2.5 rounded-2xl text-sm"
+                          style={{
+                            backgroundColor: mine ? '#1C2B4A' : '#fff',
+                            color: mine ? '#FAF8F5' : '#1C2B4A',
+                            border: mine ? 'none' : '1px solid #E5DFD5',
+                            borderBottomRightRadius: mine ? 4 : undefined,
+                            borderBottomLeftRadius: !mine ? 4 : undefined,
+                          }}
+                        >
+                          {!mine && <p className="text-[11px] font-semibold mb-0.5" style={{ color: '#C9A96E' }}>{sender?.name}</p>}
+                          {m.attachmentUrl && (
+                            m.attachmentUrl.startsWith('data:image') ? (
+                              <img src={m.attachmentUrl} alt={m.attachmentName} className="rounded-lg mb-1.5 max-h-40 object-cover" />
+                            ) : (
+                              <div className="flex items-center gap-2 mb-1.5 px-2.5 py-2 rounded-lg" style={{ backgroundColor: mine ? 'rgba(255,255,255,0.1)' : '#F5F2EC' }}>
+                                <FileText size={14} />
+                                <span className="text-xs truncate">{m.attachmentName}</span>
+                              </div>
+                            )
+                          )}
+                          {m.text && <p className="leading-relaxed">{m.text}</p>}
+                          <p className="text-[10px] mt-1 opacity-60">{formatTime(m.timestamp)}</p>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
 
-            <div className="border-t border-border">
-              {pendingAttachment && (
-                <div className="flex items-center gap-2 px-3 pt-2.5">
-                  <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted text-xs text-foreground">
-                    <FileText size={12} />
-                    <span className="truncate max-w-40">{pendingAttachment.name}</span>
-                    <button onClick={() => setPendingAttachment(null)} className="text-muted-foreground hover:text-foreground">
-                      <XIcon size={12} />
+                <div className="border-t border-border">
+                  {pendingAttachment && (
+                    <div className="flex items-center gap-2 px-3 pt-2.5">
+                      <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted text-xs text-foreground">
+                        <FileText size={12} />
+                        <span className="truncate max-w-40">{pendingAttachment.name}</span>
+                        <button onClick={() => setPendingAttachment(null)} className="text-muted-foreground hover:text-foreground">
+                          <XIcon size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <div className="p-3 flex items-center gap-2">
+                    <input ref={fileInputRef} type="file" className="hidden" onChange={handleFilePick} />
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                    >
+                      <Paperclip size={16} />
+                    </button>
+                    <input
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && send()}
+                      placeholder={`Message ${selectedGroupConvo.group.name}`}
+                      className="flex-1 px-4 py-2.5 rounded-full border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
+                    />
+                    <button
+                      onClick={send}
+                      disabled={!draft.trim() && !pendingAttachment}
+                      className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-opacity"
+                      style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: (draft.trim() || pendingAttachment) ? 1 : 0.4 }}
+                    >
+                      <Send size={16} />
                     </button>
                   </div>
                 </div>
-              )}
-              <div className="p-3 flex items-center gap-2">
-                <input ref={fileInputRef} type="file" className="hidden" onChange={handleFilePick} />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                >
-                  <Paperclip size={16} />
-                </button>
-                <input
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && send()}
-                  placeholder={`Message ${selectedGroupConvo.group.name}`}
-                  className="flex-1 px-4 py-2.5 rounded-full border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
-                />
-                <button
-                  onClick={send}
-                  disabled={!draft.trim() && !pendingAttachment}
-                  className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-opacity"
-                  style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: (draft.trim() || pendingAttachment) ? 1 : 0.4 }}
-                >
-                  <Send size={16} />
-                </button>
-              </div>
-            </div>
-            </>
+              </>
             )}
 
             {tab === 'calls' && (
@@ -755,81 +861,81 @@ export default function Messages({ role, currentUserId: propUserId, initialConta
             </div>
 
             {tab === 'chat' && (
-            <>
-            <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3" style={{ backgroundColor: '#FAF8F5' }}>
-              {selected.thread.length === 0 && (
-                <p className="text-sm text-muted-foreground text-center mt-8">No messages yet — say hello 👋</p>
-              )}
-              {selected.thread.map((m) => {
-                const mine = m.senderId === currentUserId
-                return (
-                  <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
-                    <div
-                      className="max-w-[75%] sm:max-w-[60%] px-4 py-2.5 rounded-2xl text-sm"
-                      style={{
-                        backgroundColor: mine ? '#1C2B4A' : '#fff',
-                        color: mine ? '#FAF8F5' : '#1C2B4A',
-                        border: mine ? 'none' : '1px solid #E5DFD5',
-                        borderBottomRightRadius: mine ? 4 : undefined,
-                        borderBottomLeftRadius: !mine ? 4 : undefined,
-                      }}
-                    >
-                      {m.attachmentUrl && (
-                        m.attachmentUrl.startsWith('data:image') ? (
-                          <img src={m.attachmentUrl} alt={m.attachmentName} className="rounded-lg mb-1.5 max-h-40 object-cover" />
-                        ) : (
-                          <div className="flex items-center gap-2 mb-1.5 px-2.5 py-2 rounded-lg" style={{ backgroundColor: mine ? 'rgba(255,255,255,0.1)' : '#F5F2EC' }}>
-                            <FileText size={14} />
-                            <span className="text-xs truncate">{m.attachmentName}</span>
-                          </div>
-                        )
-                      )}
-                      {m.text && <p className="leading-relaxed">{m.text}</p>}
-                      <p className="text-[10px] mt-1 opacity-60">{formatTime(m.timestamp)}</p>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+              <>
+                <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3" style={{ backgroundColor: '#FAF8F5' }}>
+                  {selected.thread.length === 0 && (
+                    <p className="text-sm text-muted-foreground text-center mt-8">No messages yet — say hello 👋</p>
+                  )}
+                  {selected.thread.map((m) => {
+                    const mine = m.senderId === currentUserId
+                    return (
+                      <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                        <div
+                          className="max-w-[75%] sm:max-w-[60%] px-4 py-2.5 rounded-2xl text-sm"
+                          style={{
+                            backgroundColor: mine ? '#1C2B4A' : '#fff',
+                            color: mine ? '#FAF8F5' : '#1C2B4A',
+                            border: mine ? 'none' : '1px solid #E5DFD5',
+                            borderBottomRightRadius: mine ? 4 : undefined,
+                            borderBottomLeftRadius: !mine ? 4 : undefined,
+                          }}
+                        >
+                          {m.attachmentUrl && (
+                            m.attachmentUrl.startsWith('data:image') ? (
+                              <img src={m.attachmentUrl} alt={m.attachmentName} className="rounded-lg mb-1.5 max-h-40 object-cover" />
+                            ) : (
+                              <div className="flex items-center gap-2 mb-1.5 px-2.5 py-2 rounded-lg" style={{ backgroundColor: mine ? 'rgba(255,255,255,0.1)' : '#F5F2EC' }}>
+                                <FileText size={14} />
+                                <span className="text-xs truncate">{m.attachmentName}</span>
+                              </div>
+                            )
+                          )}
+                          {m.text && <p className="leading-relaxed">{m.text}</p>}
+                          <p className="text-[10px] mt-1 opacity-60">{formatTime(m.timestamp)}</p>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
 
-            <div className="border-t border-border">
-              {pendingAttachment && (
-                <div className="flex items-center gap-2 px-3 pt-2.5">
-                  <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted text-xs text-foreground">
-                    <FileText size={12} />
-                    <span className="truncate max-w-40">{pendingAttachment.name}</span>
-                    <button onClick={() => setPendingAttachment(null)} className="text-muted-foreground hover:text-foreground">
-                      <XIcon size={12} />
+                <div className="border-t border-border">
+                  {pendingAttachment && (
+                    <div className="flex items-center gap-2 px-3 pt-2.5">
+                      <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted text-xs text-foreground">
+                        <FileText size={12} />
+                        <span className="truncate max-w-40">{pendingAttachment.name}</span>
+                        <button onClick={() => setPendingAttachment(null)} className="text-muted-foreground hover:text-foreground">
+                          <XIcon size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <div className="p-3 flex items-center gap-2">
+                    <input ref={fileInputRef} type="file" className="hidden" onChange={handleFilePick} />
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                    >
+                      <Paperclip size={16} />
+                    </button>
+                    <input
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && send()}
+                      placeholder="Type a message"
+                      className="flex-1 px-4 py-2.5 rounded-full border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
+                    />
+                    <button
+                      onClick={send}
+                      disabled={!draft.trim() && !pendingAttachment}
+                      className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-opacity"
+                      style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: (draft.trim() || pendingAttachment) ? 1 : 0.4 }}
+                    >
+                      <Send size={16} />
                     </button>
                   </div>
                 </div>
-              )}
-              <div className="p-3 flex items-center gap-2">
-                <input ref={fileInputRef} type="file" className="hidden" onChange={handleFilePick} />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                >
-                  <Paperclip size={16} />
-                </button>
-                <input
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && send()}
-                  placeholder="Type a message"
-                  className="flex-1 px-4 py-2.5 rounded-full border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
-                />
-                <button
-                  onClick={send}
-                  disabled={!draft.trim() && !pendingAttachment}
-                  className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-opacity"
-                  style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: (draft.trim() || pendingAttachment) ? 1 : 0.4 }}
-                >
-                  <Send size={16} />
-                </button>
-              </div>
-            </div>
-            </>
+              </>
             )}
 
             {tab === 'calls' && (
@@ -942,12 +1048,12 @@ export default function Messages({ role, currentUserId: propUserId, initialConta
           participants={
             activeCallGroupId
               ? groupList
-                  .find((g) => g.id === activeCallGroupId)
-                  ?.memberIds.filter((id) => id !== currentUserId)
-                  .map((id) => {
-                    const emp = employees.find((e) => e.id === id)
-                    return { name: emp?.name || '', initials: initials(emp?.name || '') }
-                  })
+                .find((g) => g.id === activeCallGroupId)
+                ?.memberIds.filter((id) => id !== currentUserId)
+                .map((id) => {
+                  const emp = employees.find((e) => e.id === id)
+                  return { name: emp?.name || '', initials: initials(emp?.name || '') }
+                })
               : undefined
           }
           onEnd={endCall}
