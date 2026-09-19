@@ -203,22 +203,23 @@ export default function Login({ onLogin }: LoginProps) {
     try {
       // The backend verifies the password against Supabase Auth and
       // returns the authoritative employee record + a real session pair.
-      const { token, refreshToken, user } = await authApi.login(email.trim(), password)
-      // Hand the tokens to supabase-js so the session persists across
-      // refreshes and auto-refreshes itself — this is the ONLY place a
-      // session gets established, keeping a single auth architecture.
-      const { error: setErr } = await supabase.auth.setSession({
-        access_token: token,
-        refresh_token: refreshToken,
+      const { data, error: loginError } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
       })
-      if (setErr) throw setErr
+
+      if (loginError || !data.session) {
+        throw new Error('Invalid email or password.')
+      }
+
+      const profile = await authApi.me()
 
       onLogin({
-        id: user.id as string,
-        name: user.name as string,
-        email: user.email as string,
-        role: user.role as Role,
-        office: (user.office as string) || '',
+        id: profile.id as string,
+        name: profile.name as string,
+        email: profile.email as string,
+        role: profile.role as Role,
+        office: (profile.office as string) || '',
       })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Invalid email or password.')
