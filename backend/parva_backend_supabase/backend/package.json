@@ -1,0 +1,18 @@
+{
+  "name": "parva-crm-backend",
+  "version": "2.0.0",
+  "description": "Parva Realty CRM Backend API — Supabase (PostgreSQL + Auth + Storage)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0"
+  }
+}

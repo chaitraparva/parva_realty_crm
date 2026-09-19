@@ -1,0 +1,85 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --color-background: #FAF8F5;
+  --color-foreground: #1C1A2E;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #1C1A2E;
+  --color-primary: #1C2B4A;
+  --color-primary-foreground: #FAF8F5;
+  --color-secondary: #F0EDE7;
+  --color-secondary-foreground: #1C2B4A;
+  --color-muted: #F5F2EC;
+  --color-muted-foreground: #7A7065;
+  --color-accent: #C9A96E;
+  --color-accent-foreground: #1C2B4A;
+  --color-gold-light: #E8D5A3;
+  --color-gold-dark: #A8823C;
+  --color-border: #E5DFD5;
+  --color-ring: #C9A96E;
+  --color-success: #166534;
+  --color-success-bg: #DCFCE7;
+  --color-warning: #92400E;
+  --color-warning-bg: #FEF3C7;
+  --color-danger: #991B1B;
+  --color-danger-bg: #FEE2E2;
+  --color-info: #0F766E;
+  --color-info-bg: #F0FDFA;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-serif: 'Playfair Display', Georgia, serif;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: #FAF8F5;
+  color: #1C1A2E;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.dark {
+  --color-background: #10131E;
+  --color-foreground: #F1EEE8;
+  --color-card: #1A1F30;
+  --color-card-foreground: #F1EEE8;
+  --color-primary: #C9A96E;
+  --color-primary-foreground: #10131E;
+  --color-secondary: #232A3F;
+  --color-secondary-foreground: #F1EEE8;
+  --color-muted: #1E2436;
+  --color-muted-foreground: #9AA0AE;
+  --color-accent: #C9A96E;
+  --color-accent-foreground: #10131E;
+  --color-gold-light: #E8D5A3;
+  --color-gold-dark: #A8823C;
+  --color-border: #2B3349;
+  --color-ring: #C9A96E;
+  --color-success: #4ADE80;
+  --color-success-bg: #14311F;
+  --color-warning: #FBBF24;
+  --color-warning-bg: #3A2A0C;
+  --color-danger: #F87171;
+  --color-danger-bg: #3A1414;
+  --color-info: #5EEAD4;
+  --color-info-bg: #0E2E2B;
+}
+
+.dark body {
+  background-color: #10131E;
+  color: #F1EEE8;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #E5DFD5 transparent;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #E5DFD5; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #C9A96E; }
