@@ -6,13 +6,17 @@ import Modal from '../components/ui/Modal'
 import type { Role, CallLog, InternalEmail } from '../types'
 import {
   loadChatState,
-  getOrCreateDirectConversation,
-  createGroupConversation,
+  createDirectConversation,
+  createGroup,
   sendMessage as saveMessage,
   subscribeToChat,
+  subscribeToMessages,
+  getAllEmployees,
+  getCurrentEmployee,
   type ChatState,
   type ChatGroup,
   type ChatMessageRow,
+  type ChatEmployee,
 } from '../services/chatService'
 import type { Dispatch, SetStateAction } from 'react'
 
@@ -53,7 +57,7 @@ type UiGroupConversation = {
 export const currentUserByRole: Record<Role, string> = {} as Record<Role, string>
 
 function initials(name: string) {
-  return name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
+  return (name || '').split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
 }
 
 function formatTime(ts: string) {
@@ -99,6 +103,10 @@ export default function Messages({
   setEmailsList = () => { },
 }: MessagesProps) {
   const { employees } = useData()
+  const [dbEmployees, setDbEmployees] = useState<ChatEmployee[]>([])
+  const [activeEmployeeId, setActiveEmployeeId] = useState<string>(currentUserId)
+  const [sending, setSending] = useState(false)
+
   const [search, setSearch] = useState('')
   const [draft, setDraft] = useState('')
   const [pendingAttachment, setPendingAttachment] = useState<{ name: string; url: string } | null>(null)
@@ -131,11 +139,38 @@ export default function Messages({
   const [newGroupName, setNewGroupName] = useState('')
   const [newGroupMembers, setNewGroupMembers] = useState<Set<string>>(new Set())
 
+  // Resolve authentic Supabase user -> employee record & load all active employees
+  useEffect(() => {
+    if (currentUserId) setActiveEmployeeId(currentUserId)
+
+    getCurrentEmployee()
+      .then((me) => {
+        if (me?.id) setActiveEmployeeId(me.id)
+      })
+      .catch((err) => {
+        console.warn('Could not resolve current employee from Supabase Auth:', err)
+      })
+
+    getAllEmployees()
+      .then((all) => {
+        if (all && all.length > 0) setDbEmployees(all)
+      })
+      .catch((err) => {
+        console.error('Could not load all employees from Supabase:', err)
+      })
+  }, [currentUserId])
+
+  // Combine database employees with DataContext fallback
+  const allEmployees = useMemo(() => {
+    if (dbEmployees.length > 0) return dbEmployees
+    return employees
+  }, [dbEmployees, employees])
+
   const reloadChat = async () => {
-    if (!currentUserId) return
+    if (!activeEmployeeId) return
     try {
       setChatError('')
-      const next = await loadChatState(currentUserId)
+      const next = await loadChatState(activeEmployeeId)
       setChatState(next)
     } catch (error) {
       console.error('Could not load chat:', error)
@@ -145,12 +180,15 @@ export default function Messages({
     }
   }
 
+  // Initial load and global subscription
   useEffect(() => {
     let active = true
+    if (!activeEmployeeId) return
+
     setChatLoading(true)
     setChatError('')
 
-    void loadChatState(currentUserId)
+    void loadChatState(activeEmployeeId)
       .then((next) => {
         if (active) setChatState(next)
       })
@@ -165,7 +203,7 @@ export default function Messages({
       })
 
     const unsubscribe = subscribeToChat(() => {
-      void loadChatState(currentUserId)
+      void loadChatState(activeEmployeeId)
         .then((next) => {
           if (active) setChatState(next)
         })
@@ -176,17 +214,18 @@ export default function Messages({
       active = false
       unsubscribe()
     }
-  }, [currentUserId])
+  }, [activeEmployeeId])
 
+  // Active employees list: excludes only the logged in employee
   const contacts = useMemo(
-    () => employees.filter((e: any) => e.id !== currentUserId && e.status !== 'inactive'),
-    [employees, currentUserId]
+    () => allEmployees.filter((e: any) => e.id !== activeEmployeeId && e.status !== 'inactive'),
+    [allEmployees, activeEmployeeId]
   )
 
   const directConversationFor = (contactId: string) =>
     chatState.conversations.find((conversation) =>
       conversation.type === 'direct' &&
-      chatState.members.some((m) => m.conversation_id === conversation.id && m.employee_id === currentUserId) &&
+      chatState.members.some((m) => m.conversation_id === conversation.id && m.employee_id === activeEmployeeId) &&
       chatState.members.some((m) => m.conversation_id === conversation.id && m.employee_id === contactId)
     )
 
@@ -202,53 +241,102 @@ export default function Messages({
   })
 
   const conversations = useMemo<UiConversation[]>(() => {
+    const searchLower = search.trim().toLowerCase()
+
     return contacts
       .map((contact: any) => {
         const conversation = chatState.conversations.find((c) =>
           c.type === 'direct' &&
-          chatState.members.some((m) => m.conversation_id === c.id && m.employee_id === currentUserId) &&
+          chatState.members.some((m) => m.conversation_id === c.id && m.employee_id === activeEmployeeId) &&
           chatState.members.some((m) => m.conversation_id === c.id && m.employee_id === contact.id)
         )
         const thread = conversation
           ? chatState.messages
             .filter((m) => m.conversation_id === conversation.id)
             .sort((a, b) => a.created_at.localeCompare(b.created_at))
-            .map((m) => toUiMessage(m, m.sender_id === currentUserId ? contact.id : currentUserId))
+            .map((m) => toUiMessage(m, m.sender_id === activeEmployeeId ? contact.id : activeEmployeeId))
           : []
         const last = thread[thread.length - 1]
         return { contact, thread, last, unread: 0 }
       })
-      .filter((c) => !search || c.contact.name.toLowerCase().includes(search.toLowerCase()))
+      .filter((c) => {
+        if (!searchLower) return true
+        return (
+          c.contact.name?.toLowerCase().includes(searchLower) ||
+          c.contact.email?.toLowerCase().includes(searchLower) ||
+          c.contact.department?.toLowerCase().includes(searchLower) ||
+          c.contact.designation?.toLowerCase().includes(searchLower) ||
+          c.contact.role?.toLowerCase().includes(searchLower) ||
+          c.contact.team?.toLowerCase().includes(searchLower)
+        )
+      })
       .sort((a, b) => {
-        if (!a.last && !b.last) return a.contact.name.localeCompare(b.contact.name)
+        if (!a.last && !b.last) return (a.contact.name || '').localeCompare(b.contact.name || '')
         if (!a.last) return 1
         if (!b.last) return -1
         return b.last.timestamp.localeCompare(a.last.timestamp)
       })
-  }, [contacts, chatState, currentUserId, search])
+  }, [contacts, chatState, activeEmployeeId, search])
 
   const groupConversations = useMemo<UiGroupConversation[]>(() => {
+    const searchLower = search.trim().toLowerCase()
+
     return chatState.groups
       .map((group) => {
         const thread = chatState.messages
-          .filter((m) => chatState.members.some((member) => member.conversation_id === group.id && member.employee_id === currentUserId) && m.conversation_id === group.id)
+          .filter((m) => chatState.members.some((member) => member.conversation_id === group.id && member.employee_id === activeEmployeeId) && m.conversation_id === group.id)
           .sort((a, b) => a.created_at.localeCompare(b.created_at))
           .map((m) => ({ ...toUiMessage(m), groupId: group.id, readBy: [m.sender_id] }))
         const last = thread[thread.length - 1]
         return { group, thread, last, unread: 0 }
       })
-      .filter((g) => !search || g.group.name.toLowerCase().includes(search.toLowerCase()))
+      .filter((g) => !searchLower || g.group.name.toLowerCase().includes(searchLower))
       .sort((a, b) => {
-        if (!a.last && !b.last) return a.group.name.localeCompare(b.group.name)
+        if (!a.last && !b.last) return (a.group.name || '').localeCompare(b.group.name || '')
         if (!a.last) return 1
         if (!b.last) return -1
         return b.last.timestamp.localeCompare(a.last.timestamp)
       })
-  }, [chatState, currentUserId, search])
+  }, [chatState, activeEmployeeId, search])
 
   const [selectedId, setSelectedId] = useState<string | null>(initialContactId ?? initialGroupId ?? null)
   const selected = conversations.find((c) => c.contact.id === selectedId)
   const selectedGroupConvo = groupConversations.find((g) => g.group.id === selectedId)
+
+  // Dedicated realtime subscriber for active conversation thread
+  useEffect(() => {
+    let activeConvoId: string | undefined
+
+    if (selectedGroupConvo) {
+      activeConvoId = selectedGroupConvo.group.id
+    } else if (selectedId) {
+      const convo = chatState.conversations.find((c) =>
+        c.type === 'direct' &&
+        chatState.members.some((m) => m.conversation_id === c.id && m.employee_id === activeEmployeeId) &&
+        chatState.members.some((m) => m.conversation_id === c.id && m.employee_id === selectedId)
+      )
+      activeConvoId = convo?.id
+    }
+
+    if (!activeConvoId) return
+
+    const unsubscribe = subscribeToMessages(activeConvoId, (incomingRow) => {
+      setChatState((prev) => {
+        // Prevent duplicate messages in realtime
+        if (prev.messages.some((m) => m.id === incomingRow.id)) {
+          return prev
+        }
+        return {
+          ...prev,
+          messages: [...prev.messages, incomingRow],
+        }
+      })
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [selectedId, selectedGroupConvo?.group.id, chatState.conversations, chatState.members, activeEmployeeId])
 
   useEffect(() => {
     if (initialContactId) {
@@ -279,15 +367,23 @@ export default function Messages({
       if (selectedGroupConvo) {
         setEmails((prev) => prev.map((e) => (e.groupId === selectedId ? { ...e, read: true } : e)))
       } else {
-        setEmails((prev) => prev.map((e) => (e.senderId === selectedId && e.recipientId === currentUserId ? { ...e, read: true } : e)))
+        setEmails((prev) => prev.map((e) => (e.senderId === selectedId && e.recipientId === activeEmployeeId ? { ...e, read: true } : e)))
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, selectedId, currentUserId])
+  }, [tab, selectedId, activeEmployeeId])
 
-  const openConversation = (contactId: string) => {
+  const openConversation = async (contactId: string) => {
     setSelectedId(contactId)
     setTab('chat')
+    try {
+      const convoId = await createDirectConversation(activeEmployeeId, contactId)
+      if (!chatState.conversations.some((c) => c.id === convoId)) {
+        await reloadChat()
+      }
+    } catch (err) {
+      console.error('Failed to prepare direct conversation:', err)
+    }
   }
 
   const openGroup = (groupId: string) => {
@@ -296,30 +392,55 @@ export default function Messages({
   }
 
   const send = async () => {
-    if ((!draft.trim() && !pendingAttachment) || !selectedId) return
+    if ((!draft.trim() && !pendingAttachment) || !selectedId || sending) return
 
+    setSending(true)
     try {
       setChatError('')
       let conversationId = selectedGroupConvo?.group.id
 
       if (!conversationId) {
-        conversationId = await getOrCreateDirectConversation(selectedId)
+        conversationId = await createDirectConversation(activeEmployeeId, selectedId)
       }
 
-      await saveMessage(
+      const saved = await saveMessage(
         conversationId,
-        currentUserId,
+        activeEmployeeId,
         draft.trim(),
         pendingAttachment?.name,
-        pendingAttachment?.url,
+        pendingAttachment?.url
       )
 
       setDraft('')
       setPendingAttachment(null)
-      await reloadChat()
+
+      // Add to local state immediately without waiting
+      setChatState((prev) => {
+        const exists = prev.messages.some((m) => m.id === saved.id)
+        const hasConvo = prev.conversations.some((c) => c.id === conversationId)
+        return {
+          ...prev,
+          conversations: hasConvo
+            ? prev.conversations
+            : [
+              ...prev.conversations,
+              {
+                id: conversationId!,
+                type: selectedGroupConvo ? 'group' : 'direct',
+                name: selectedGroupConvo?.group.name || null,
+                created_by: activeEmployeeId,
+                created_at: new Date().toISOString(),
+              },
+            ],
+          messages: exists ? prev.messages : [...prev.messages, saved],
+        }
+      })
     } catch (error) {
       console.error('Could not send message:', error)
       setChatError(error instanceof Error ? error.message : 'Could not send message.')
+      // NOTE: draft is kept in input so user does not lose their text
+    } finally {
+      setSending(false)
     }
   }
 
@@ -337,9 +458,9 @@ export default function Messages({
       const group = chatState.groups.find((g) => g.id === activeCallGroupId)
       const newCall: CallLog = {
         id: `call-${Date.now()}`,
-        callerId: currentUserId,
+        callerId: activeEmployeeId,
         groupId: activeCallGroupId,
-        participantIds: group?.memberIds || [currentUserId],
+        participantIds: group?.memberIds || [activeEmployeeId],
         timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
         durationSec,
         status: 'Completed',
@@ -352,7 +473,7 @@ export default function Messages({
     if (!activeCallWith) return
     const newCall: CallLog = {
       id: `call-${Date.now()}`,
-      callerId: currentUserId,
+      callerId: activeEmployeeId,
       calleeId: activeCallWith,
       timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
       durationSec,
@@ -387,9 +508,9 @@ export default function Messages({
     if (selectedGroupConvo) {
       const newEmail: InternalEmail = {
         id: `iemail-${Date.now()}`,
-        senderId: currentUserId,
+        senderId: activeEmployeeId,
         groupId: selectedGroupConvo.group.id,
-        recipientIds: selectedGroupConvo.group.memberIds.filter((id) => id !== currentUserId),
+        recipientIds: selectedGroupConvo.group.memberIds.filter((id) => id !== activeEmployeeId),
         subject: composeForm.subject.trim(),
         body: composeForm.body.trim(),
         timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
@@ -406,7 +527,7 @@ export default function Messages({
     if (!selectedId) return
     const newEmail: InternalEmail = {
       id: `iemail-${Date.now()}`,
-      senderId: currentUserId,
+      senderId: activeEmployeeId,
       recipientId: selectedId,
       subject: composeForm.subject.trim(),
       body: composeForm.body.trim(),
@@ -430,12 +551,12 @@ export default function Messages({
     })
   }
 
-  const createGroup = async () => {
+  const createGroupHandler = async () => {
     if (!newGroupName.trim() || newGroupMembers.size === 0) return
     try {
       setChatError('')
-      const memberIds = [currentUserId, ...Array.from(newGroupMembers)]
-      const groupId = await createGroupConversation(newGroupName.trim(), memberIds)
+      const memberIds = [activeEmployeeId, ...Array.from(newGroupMembers)]
+      const groupId = await createGroup(newGroupName.trim(), memberIds, activeEmployeeId)
       setNewGroupName('')
       setNewGroupMembers(new Set())
       setShowNewGroupModal(false)
@@ -449,11 +570,11 @@ export default function Messages({
   }
 
   const contactCallHistory = selectedId
-    ? callLogs.filter((c) => (c.callerId === currentUserId && c.calleeId === selectedId) || (c.callerId === selectedId && c.calleeId === currentUserId)).sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    ? callLogs.filter((c) => (c.callerId === activeEmployeeId && c.calleeId === selectedId) || (c.callerId === selectedId && c.calleeId === activeEmployeeId)).sort((a, b) => b.timestamp.localeCompare(a.timestamp))
     : []
 
   const contactEmails = selectedId
-    ? emails.filter((e) => (e.senderId === currentUserId && e.recipientId === selectedId) || (e.senderId === selectedId && e.recipientId === currentUserId)).sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    ? emails.filter((e) => (e.senderId === activeEmployeeId && e.recipientId === selectedId) || (e.senderId === selectedId && e.recipientId === activeEmployeeId)).sort((a, b) => b.timestamp.localeCompare(a.timestamp))
     : []
 
   const groupCallHistory = selectedGroupConvo
@@ -466,8 +587,8 @@ export default function Messages({
 
   const groupMemberNames = (group: ChatGroup) =>
     group.memberIds
-      .filter((id) => id !== currentUserId)
-      .map((id) => employees.find((e: any) => e.id === id)?.name?.split(' ')[0])
+      .filter((id) => id !== activeEmployeeId)
+      .map((id) => allEmployees.find((e: any) => e.id === id)?.name?.split(' ')[0])
       .filter(Boolean)
       .join(', ')
 
@@ -633,12 +754,14 @@ export default function Messages({
             {tab === 'chat' && (
               <>
                 <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3" style={{ backgroundColor: '#FAF8F5' }}>
-                  {selectedGroupConvo.thread.length === 0 && (
+                  {chatError ? (
+                    <div className="text-xs text-red-600 bg-red-50 p-2.5 rounded-lg text-center mx-4">{chatError}</div>
+                  ) : selectedGroupConvo.thread.length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center mt-8">No messages yet — say hello 👋</p>
-                  )}
+                  ) : null}
                   {selectedGroupConvo.thread.map((m) => {
-                    const mine = m.senderId === currentUserId
-                    const sender = employees.find((e) => e.id === m.senderId)
+                    const mine = m.senderId === activeEmployeeId
+                    const sender = allEmployees.find((e) => e.id === m.senderId)
                     return (
                       <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
                         <div
@@ -699,9 +822,9 @@ export default function Messages({
                     />
                     <button
                       onClick={send}
-                      disabled={!draft.trim() && !pendingAttachment}
+                      disabled={(!draft.trim() && !pendingAttachment) || sending}
                       className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-opacity"
-                      style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: (draft.trim() || pendingAttachment) ? 1 : 0.4 }}
+                      style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: (draft.trim() || pendingAttachment) && !sending ? 1 : 0.4 }}
                     >
                       <Send size={16} />
                     </button>
@@ -863,11 +986,13 @@ export default function Messages({
             {tab === 'chat' && (
               <>
                 <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3" style={{ backgroundColor: '#FAF8F5' }}>
-                  {selected.thread.length === 0 && (
+                  {chatError ? (
+                    <div className="text-xs text-red-600 bg-red-50 p-2.5 rounded-lg text-center mx-4">{chatError}</div>
+                  ) : selected.thread.length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center mt-8">No messages yet — say hello 👋</p>
-                  )}
+                  ) : null}
                   {selected.thread.map((m) => {
-                    const mine = m.senderId === currentUserId
+                    const mine = m.senderId === activeEmployeeId
                     return (
                       <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
                         <div
@@ -927,9 +1052,9 @@ export default function Messages({
                     />
                     <button
                       onClick={send}
-                      disabled={!draft.trim() && !pendingAttachment}
+                      disabled={(!draft.trim() && !pendingAttachment) || sending}
                       className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-opacity"
-                      style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: (draft.trim() || pendingAttachment) ? 1 : 0.4 }}
+                      style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: (draft.trim() || pendingAttachment) && !sending ? 1 : 0.4 }}
                     >
                       <Send size={16} />
                     </button>
@@ -993,7 +1118,7 @@ export default function Messages({
                 ) : (
                   <div className="space-y-2">
                     {contactEmails.map((e) => {
-                      const outgoing = e.senderId === currentUserId
+                      const outgoing = e.senderId === activeEmployeeId
                       const isOpen = openEmailId === e.id
                       return (
                         <div key={e.id} className="rounded-xl bg-card border border-border overflow-hidden">
@@ -1042,16 +1167,15 @@ export default function Messages({
         <CallModal
           open={!!(activeCallWith || activeCallGroupId)}
           callType={activeCallType}
-          contactName={employees.find((e) => e.id === activeCallWith)?.name || ''}
-          contactInitials={initials(employees.find((e) => e.id === activeCallWith)?.name || '')}
-          groupName={activeCallGroupId ? groupList.find((g) => g.id === activeCallGroupId)?.name : undefined}
+          contactName={allEmployees.find((e) => e.id === activeCallWith)?.name || ''}
+          contactInitials={initials(allEmployees.find((e) => e.id === activeCallWith)?.name || '')}
+          groupName={activeCallGroupId ? (chatState.groups.find((g) => g.id === activeCallGroupId)?.name || groupList.find((g) => g.id === activeCallGroupId)?.name) : undefined}
           participants={
             activeCallGroupId
-              ? groupList
-                .find((g) => g.id === activeCallGroupId)
-                ?.memberIds.filter((id) => id !== currentUserId)
-                .map((id) => {
-                  const emp = employees.find((e) => e.id === id)
+              ? (chatState.groups.find((g) => g.id === activeCallGroupId)?.memberIds || groupList.find((g) => g.id === activeCallGroupId)?.memberIds || [])
+                .filter((id: string) => id !== activeEmployeeId)
+                .map((id: string) => {
+                  const emp = allEmployees.find((e) => e.id === id)
                   return { name: emp?.name || '', initials: initials(emp?.name || '') }
                 })
               : undefined
@@ -1165,7 +1289,7 @@ export default function Messages({
               Cancel
             </button>
             <button
-              onClick={createGroup}
+              onClick={createGroupHandler}
               disabled={!newGroupName.trim() || newGroupMembers.size === 0}
               className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-opacity"
               style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: (!newGroupName.trim() || newGroupMembers.size === 0) ? 0.5 : 1 }}
@@ -1189,7 +1313,7 @@ export default function Messages({
               <div>
                 <h3 className="font-serif text-lg font-semibold text-foreground">{selectedGroupConvo.group.name}</h3>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Created {selectedGroupConvo.group.createdAt} by {employees.find((e) => e.id === selectedGroupConvo.group.createdBy)?.name || 'Unknown'}
+                  Created {selectedGroupConvo.group.createdAt} by {allEmployees.find((e) => e.id === selectedGroupConvo.group.createdBy)?.name || 'Unknown'}
                 </p>
               </div>
             </div>
@@ -1224,9 +1348,9 @@ export default function Messages({
               </p>
               <div className="space-y-1 max-h-64 overflow-y-auto">
                 {selectedGroupConvo.group.memberIds.map((id) => {
-                  const member = employees.find((e) => e.id === id)
+                  const member = allEmployees.find((e) => e.id === id)
                   if (!member) return null
-                  const isYou = id === currentUserId
+                  const isYou = id === activeEmployeeId
                   const isCreator = id === selectedGroupConvo.group.createdBy
                   return (
                     <div key={id} className="flex items-center gap-3 px-2 py-2 rounded-lg">
