@@ -193,25 +193,35 @@ export default function Login({ onLogin }: LoginProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-
-    // Cancel any in-progress session restoration.
-    loginStartedRef.current = true
-
     setError('')
-    if (!selectedRole) { setError('Please select your role first.'); return }
+
+    if (!selectedRole) {
+      setError('Please select your role first.')
+      return
+    }
+
+    // Stop any session-restoration attempt from completing while a fresh
+    // login is in progress.
+    loginStartedRef.current = true
     setLoading(true)
+
     try {
-      // The backend verifies the password against Supabase Auth and
-      // returns the authoritative employee record + a real session pair.
+      // Clear any stale browser session before authenticating the requested
+      // account. This guarantees the new login starts with a clean session.
+      await supabase.auth.signOut()
+
+      // Supabase Auth is the single source of truth for authentication.
       const { data, error: loginError } = await supabase.auth.signInWithPassword({
         email: email.trim().toLowerCase(),
         password,
       })
 
       if (loginError || !data.session) {
-        throw new Error('Invalid email or password.')
+        throw new ApiError('Invalid email or password.', 401)
       }
 
+      // The backend verifies the exact Supabase access token and returns
+      // the employee record linked to that authenticated user.
       const profile = await authApi.me()
 
       onLogin({
@@ -222,7 +232,14 @@ export default function Login({ onLogin }: LoginProps) {
         office: (profile.office as string) || '',
       })
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Invalid email or password.')
+      // Never leave a partially authenticated/stale session behind.
+      await supabase.auth.signOut()
+
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : 'Invalid email or password.'
+      )
     } finally {
       setLoading(false)
     }
