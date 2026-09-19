@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useData } from '../../contexts/DataContext'
+import { supabase } from '../../lib/supabase'
 import {
   Mail,
   Phone,
@@ -46,27 +47,109 @@ const roleLabels: Record<Role, string> = {
   agent: 'CRM Agent',
 }
 
+type OrgEmployee = Employee & {
+  officeName?: string | null
+}
+
+type DbEmployee = {
+  id: string
+  employee_code: string | null
+  name: string
+  email: string | null
+  phone: string | null
+  role: string
+  department: string | null
+  designation: string | null
+  status: string
+  manager_id: string | null
+  office_id: string | null
+  join_date?: string | null
+  created_at?: string | null
+  capacity_limit?: number | null
+  conversions?: number | null
+  response_time?: string | null
+  offices?: {
+    id: string
+    name: string
+  } | null
+}
+
+function mapDbEmployee(row: DbEmployee): OrgEmployee {
+  const role: Role =
+    row.role === 'admin' ||
+      row.role === 'manager' ||
+      row.role === 'agent'
+      ? row.role
+      : 'manager'
+
+  const officeName = row.offices?.name ?? null
+
+  return {
+    id: row.id,
+    employeeCode: row.employee_code ?? '',
+    name: row.name ?? '',
+    email: row.email ?? '',
+    phone: row.phone ?? '',
+    role,
+    department: row.department ?? '',
+    designation: row.designation ?? '',
+    status:
+      row.status === 'inactive'
+        ? 'inactive'
+        : row.status === 'on-leave'
+          ? 'on-leave'
+          : 'active',
+    office:
+      officeName === 'Dubai'
+        ? ('Dubai' as Employee['office'])
+        : officeName === 'Bangalore'
+          ? ('Bangalore' as Employee['office'])
+          : (officeName as Employee['office']),
+    team: row.department || 'Sales',
+    managerId: row.manager_id ?? undefined,
+    joinDate:
+      row.join_date ||
+      (row.created_at
+        ? new Date(row.created_at).toLocaleDateString(
+          'en-IN'
+        )
+        : '—'),
+    capacityLimit:
+      row.capacity_limit ?? 0,
+    leadsAssigned: 0,
+    conversions: row.conversions ?? 0,
+    responseTime:
+      row.response_time ?? '—',
+  }
+}
+
 function EmployeeCard({
   emp,
   size = 'normal',
   onClick,
   liveCount,
 }: {
-  emp: Employee
+  emp: OrgEmployee
   size?: 'large' | 'normal' | 'small'
   onClick?: () => void
   liveCount?: number
 }) {
-  const colors = roleColors[emp.role]
+  const colors =
+    roleColors[emp.role] || roleColors.manager
 
-  const enrichedEmp =
-    liveCount !== undefined
-      ? { ...emp, leadsAssigned: liveCount }
-      : emp
+  const enrichedEmp = {
+    ...emp,
+    leadsAssigned:
+      liveCount !== undefined
+        ? liveCount
+        : emp.leadsAssigned,
+  }
 
   const wStatus =
     emp.role === 'agent'
-      ? getWorkloadStatus(enrichedEmp)
+      ? getWorkloadStatus(
+        enrichedEmp as Employee
+      )
       : null
 
   const wColor = wStatus
@@ -78,15 +161,18 @@ function EmployeeCard({
       onClick={onClick}
       className="w-full bg-card rounded-xl border shadow-sm p-4 text-center transition-all hover:shadow-md hover:-translate-y-0.5 relative"
       style={{
-        borderColor: wColor
-          ? wColor + '60'
-          : colors.border,
+        borderColor:
+          wColor
+            ? wColor + '60'
+            : colors.border,
       }}
     >
       {wColor && (
         <span
           className="absolute top-2 right-2 w-2.5 h-2.5 rounded-full"
-          style={{ backgroundColor: wColor }}
+          style={{
+            backgroundColor: wColor,
+          }}
           title={`Workload: ${wStatus}`}
         />
       )}
@@ -123,7 +209,9 @@ function EmployeeCard({
       </div>
 
       <p
-        className={`font-semibold text-foreground ${size === 'small' ? 'text-xs' : 'text-sm'
+        className={`font-semibold text-foreground ${size === 'small'
+            ? 'text-xs'
+            : 'text-sm'
           }`}
       >
         {emp.name}
@@ -140,13 +228,18 @@ function EmployeeCard({
 
       {size !== 'small' && (
         <div className="mt-2 pt-2 border-t border-border space-y-0.5">
+
           <p className="text-xs text-muted-foreground flex items-center justify-center gap-1">
             <Mail size={10} />
-            {emp.email.split('@')[0]}
+            {emp.email
+              ? emp.email.split('@')[0]
+              : 'No email'}
           </p>
 
           <p className="text-[10px] font-medium text-accent">
-            {emp.department || emp.team}
+            {emp.department ||
+              emp.team ||
+              'Sales'}
           </p>
 
           {liveCount !== undefined &&
@@ -154,12 +247,15 @@ function EmployeeCard({
               <p
                 className="text-xs font-medium"
                 style={{
-                  color: wColor || '#7A7065',
+                  color:
+                    wColor || '#7A7065',
                 }}
               >
-                {liveCount}/{emp.capacityLimit} leads
+                {liveCount}/
+                {emp.capacityLimit} leads
               </p>
             )}
+
         </div>
       )}
     </button>
@@ -180,69 +276,146 @@ export default function OrgChart({
   onCreateGroup,
   onNavigate,
 }: OrgChartProps) {
-  const {
-    employees,
-    leads,
-    loading,
-  } = useData()
+  const { leads } = useData()
+
+  const [employees, setEmployees] =
+    useState<OrgEmployee[]>([])
+
+  const [loadingEmployees, setLoadingEmployees] =
+    useState(true)
+
+  const [employeeError, setEmployeeError] =
+    useState('')
 
   const [tab, setTab] =
     useState<'chart' | 'directory'>('chart')
 
-  const [search, setSearch] = useState('')
+  const [search, setSearch] =
+    useState('')
 
   const [selectedId, setSelectedId] =
     useState<string | null>(null)
 
+  useEffect(() => {
+    let active = true
+
+    async function loadEmployees() {
+      setLoadingEmployees(true)
+      setEmployeeError('')
+
+      const {
+        data,
+        error,
+      } = await supabase
+        .from('employees')
+        .select(`
+          id,
+          employee_code,
+          name,
+          email,
+          phone,
+          role,
+          department,
+          designation,
+          status,
+          manager_id,
+          office_id,
+          join_date,
+          created_at,
+          capacity_limit,
+          conversions,
+          response_time,
+          offices (
+            id,
+            name
+          )
+        `)
+        .neq('status', 'inactive')
+        .order('name', {
+          ascending: true,
+        })
+
+      if (!active) return
+
+      if (error) {
+        setEmployeeError(
+          error.message ||
+          'Could not load organization data.'
+        )
+        setEmployees([])
+        setLoadingEmployees(false)
+        return
+      }
+
+      setEmployees(
+        ((data || []) as DbEmployee[]).map(
+          mapDbEmployee
+        )
+      )
+
+      setLoadingEmployees(false)
+    }
+
+    loadEmployees()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
   const selected =
-    employees.find((e) => e.id === selectedId) ||
-    null
+    employees.find(
+      (e) => e.id === selectedId
+    ) || null
 
   const selectedManager =
     selected?.managerId
       ? employees.find(
-        (e) => e.id === selected.managerId
+        (e) =>
+          e.id === selected.managerId
       )
       : null
 
-  const selectedDirectReports = selected
-    ? employees.filter(
-      (e) => e.managerId === selected.id
-    )
-    : []
+  const selectedDirectReports =
+    selected
+      ? employees.filter(
+        (e) =>
+          e.managerId === selected.id
+      )
+      : []
 
-  // Live lead counts per employee
   const liveLeads = leads.filter(
     (l) => l.status !== 'Cancelled'
   )
 
-  const leadCountByEmp = Object.fromEntries(
-    employees.map((e) => [
-      e.id,
-      liveLeads.filter(
-        (l) => l.assignedTo === e.id
-      ).length,
-    ])
-  )
+  const leadCountByEmp =
+    Object.fromEntries(
+      employees.map((e) => [
+        e.id,
+        liveLeads.filter(
+          (l) =>
+            l.assignedTo === e.id
+        ).length,
+      ])
+    )
 
-  // Enrich employee with live lead count
-  const enriched = (emp: Employee) => ({
-    ...emp,
-    leadsAssigned:
-      leadCountByEmp[emp.id] ??
-      emp.leadsAssigned,
-  })
+  const enriched = (emp: OrgEmployee) =>
+    ({
+      ...emp,
+      leadsAssigned:
+        leadCountByEmp[emp.id] ??
+        emp.leadsAssigned,
+    }) as Employee
 
-  // Resolve the actual admin from the database.
-  // No hardcoded employee ID.
   const admin =
     employees.find(
       (e) => e.role === 'admin'
     ) || null
 
-  const managers = employees.filter(
-    (e) => e.role === 'manager'
-  )
+  const managers =
+    employees.filter(
+      (e) => e.role === 'manager'
+    )
 
   const bangaloreManagers =
     managers.filter(
@@ -254,9 +427,16 @@ export default function OrgChart({
       (m) => m.office === 'Dubai'
     )
 
+  const otherOfficeManagers =
+    managers.filter(
+      (m) =>
+        m.office !== 'Bangalore' &&
+        m.office !== 'Dubai'
+    )
+
   const agentsByManager: Record<
     string,
-    Employee[]
+    OrgEmployee[]
   > = {}
 
   managers.forEach((manager) => {
@@ -268,15 +448,20 @@ export default function OrgChart({
       )
   })
 
-  const filtered = employees.filter(
-    (e) =>
-      e.name
-        .toLowerCase()
-        .includes(search.toLowerCase()) ||
-      e.email
-        .toLowerCase()
-        .includes(search.toLowerCase())
-  )
+  const filtered =
+    employees.filter(
+      (e) =>
+        e.name
+          .toLowerCase()
+          .includes(
+            search.toLowerCase()
+          ) ||
+        e.email
+          .toLowerCase()
+          .includes(
+            search.toLowerCase()
+          )
+    )
 
   const messageTeam = () => {
     if (
@@ -287,11 +472,9 @@ export default function OrgChart({
       return
     }
 
-    const adminId = admin.id
-
     const memberIds = Array.from(
       new Set([
-        adminId,
+        admin.id,
         selected.id,
         ...selectedDirectReports.map(
           (r) => r.id
@@ -299,19 +482,23 @@ export default function OrgChart({
       ])
     )
 
-    const existing = groupList.find(
-      (g) =>
-        g.memberIds.length ===
-        memberIds.length &&
-        memberIds.every((id) =>
-          g.memberIds.includes(id)
-        )
-    )
+    const existing =
+      groupList.find(
+        (g) =>
+          g.memberIds.length ===
+          memberIds.length &&
+          memberIds.every((id) =>
+            g.memberIds.includes(id)
+          )
+      )
 
     if (existing) {
-      onNavigate?.('messages', {
-        groupId: existing.id,
-      })
+      onNavigate?.(
+        'messages',
+        {
+          groupId: existing.id,
+        }
+      )
       return
     }
 
@@ -319,43 +506,122 @@ export default function OrgChart({
       id: `group-${Date.now()}`,
       name: `${selected.name.split(' ')[0]}'s Team`,
       memberIds,
-      createdBy: adminId,
-      createdAt: new Date()
-        .toISOString()
-        .slice(0, 10),
+      createdBy: admin.id,
+      createdAt:
+        new Date()
+          .toISOString()
+          .slice(0, 10),
     }
 
     onCreateGroup?.(newGroup)
 
-    onNavigate?.('messages', {
-      groupId: newGroup.id,
-    })
+    onNavigate?.(
+      'messages',
+      {
+        groupId: newGroup.id,
+      }
+    )
   }
 
-  // Prevent the initial render from trying to access
-  // admin.id before employees have loaded.
-  if (loading) {
+  if (loadingEmployees) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <p className="text-sm text-muted-foreground">
-          Loading organization...
-        </p>
+      <div className="space-y-6">
+        <div className="bg-card rounded-xl border border-border shadow-sm p-12 text-center">
+          <div className="mx-auto w-6 h-6 rounded-full border-2 border-border border-t-accent animate-spin" />
+          <p className="text-sm text-muted-foreground mt-4">
+            Loading organization...
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (employeeError) {
+    return (
+      <div className="space-y-6">
+        <div className="bg-card rounded-xl border border-border shadow-sm p-8 text-center">
+          <h2 className="font-serif text-lg text-foreground">
+            Could not load organization
+          </h2>
+          <p className="text-sm text-red-500 mt-2">
+            {employeeError}
+          </p>
+        </div>
       </div>
     )
   }
 
   if (!admin) {
     return (
-      <div className="bg-card rounded-xl border border-border shadow-sm p-8 text-center">
-        <h2 className="font-serif text-lg text-foreground">
-          Organization data unavailable
-        </h2>
-        <p className="text-sm text-muted-foreground mt-2">
-          No Super Admin employee was found.
-        </p>
+      <div className="space-y-6">
+        <div className="bg-card rounded-xl border border-border shadow-sm p-8 text-center">
+          <h2 className="font-serif text-lg text-foreground">
+            Organization data unavailable
+          </h2>
+          <p className="text-sm text-muted-foreground mt-2">
+            The employee list loaded, but no
+            Super Admin record was found.
+          </p>
+        </div>
       </div>
     )
   }
+
+  const renderManagerBranch = (
+    manager: OrgEmployee
+  ) => (
+    <div
+      key={manager.id}
+      className="flex flex-col items-center gap-3"
+    >
+      <div className="w-px h-6 bg-border" />
+
+      <div className="w-48">
+        <EmployeeCard
+          emp={manager}
+          onClick={() =>
+            setSelectedId(manager.id)
+          }
+          liveCount={
+            leadCountByEmp[manager.id]
+          }
+        />
+      </div>
+
+      {agentsByManager[manager.id]
+        ?.length > 0 && (
+          <>
+            <div className="w-px h-6 bg-border" />
+
+            <div className="flex gap-3">
+              {agentsByManager[
+                manager.id
+              ].map((agent) => (
+                <div
+                  key={agent.id}
+                  className="w-36"
+                >
+                  <EmployeeCard
+                    emp={agent}
+                    size="small"
+                    onClick={() =>
+                      setSelectedId(
+                        agent.id
+                      )
+                    }
+                    liveCount={
+                      leadCountByEmp[
+                      agent.id
+                      ]
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+    </div>
+  )
 
   return (
     <div className="space-y-6">
@@ -364,11 +630,14 @@ export default function OrgChart({
       <div className="bg-card rounded-xl border border-border shadow-sm">
 
         <div className="border-b border-border px-5 flex gap-6">
+
           {(['chart', 'directory'] as const).map(
             (t) => (
               <button
                 key={t}
-                onClick={() => setTab(t)}
+                onClick={() =>
+                  setTab(t)
+                }
                 className="py-4 text-sm font-medium capitalize transition-colors border-b-2 -mb-px"
                 style={{
                   borderColor:
@@ -387,26 +656,28 @@ export default function OrgChart({
               </button>
             )
           )}
+
         </div>
 
-        {/* =====================================================
-            ORG CHART
-        ===================================================== */}
-
+        {/* ORG CHART */}
         {tab === 'chart' && (
           <div className="p-4 sm:p-8 overflow-x-auto">
 
-            {/* Chaitra — Super Admin / Director */}
+            {/* Chaitra */}
             <div className="flex justify-center mb-6">
               <div className="w-56">
                 <EmployeeCard
                   emp={admin}
                   size="large"
                   onClick={() =>
-                    setSelectedId(admin.id)
+                    setSelectedId(
+                      admin.id
+                    )
                   }
                   liveCount={
-                    leadCountByEmp[admin.id]
+                    leadCountByEmp[
+                    admin.id
+                    ]
                   }
                 />
               </div>
@@ -417,170 +688,99 @@ export default function OrgChart({
             </div>
 
             {/* India */}
-            <div className="mb-8">
+            {bangaloreManagers.length >
+              0 && (
+                <div className="mb-8">
 
-              <div className="flex items-center gap-2 mb-4 justify-center">
-                <span className="px-3 py-1 rounded-full text-xs font-semibold bg-sky-50 text-sky-700">
-                  🇮🇳 India
-                </span>
-              </div>
+                  <div className="flex items-center gap-2 mb-4 justify-center">
+                    <span className="px-3 py-1 rounded-full text-xs font-semibold bg-sky-50 text-sky-700">
+                      🇮🇳 India
+                    </span>
+                  </div>
 
-              <div className="flex gap-6 justify-center flex-wrap">
+                  <div className="flex gap-6 justify-center flex-wrap">
+                    {bangaloreManagers.map(
+                      renderManagerBranch
+                    )}
+                  </div>
 
-                {bangaloreManagers.map(
-                  (mgr) => (
-                    <div
-                      key={mgr.id}
-                      className="flex flex-col items-center gap-3"
-                    >
-
-                      <div className="w-px h-6 bg-border" />
-
-                      <div className="w-48">
-                        <EmployeeCard
-                          emp={mgr}
-                          onClick={() =>
-                            setSelectedId(
-                              mgr.id
-                            )
-                          }
-                          liveCount={
-                            leadCountByEmp[
-                            mgr.id
-                            ]
-                          }
-                        />
-                      </div>
-
-                      {agentsByManager[
-                        mgr.id
-                      ]?.length > 0 && (
-                          <>
-                            <div className="w-px h-6 bg-border" />
-
-                            <div className="flex gap-3">
-                              {agentsByManager[
-                                mgr.id
-                              ].map((agent) => (
-                                <div
-                                  key={agent.id}
-                                  className="w-36"
-                                >
-                                  <EmployeeCard
-                                    emp={agent}
-                                    size="small"
-                                    onClick={() =>
-                                      setSelectedId(
-                                        agent.id
-                                      )
-                                    }
-                                    liveCount={
-                                      leadCountByEmp[
-                                      agent.id
-                                      ]
-                                    }
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        )}
-
-                    </div>
-                  )
-                )}
-
-              </div>
-            </div>
+                </div>
+              )}
 
             {/* Dubai */}
-            {dubaiManagers.length > 0 && (
-              <div>
+            {dubaiManagers.length >
+              0 && (
+                <div className="mb-8">
 
-                <div className="flex items-center gap-2 mb-4 justify-center">
-                  <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700">
-                    🇦🇪 Dubai
-                  </span>
+                  <div className="flex items-center gap-2 mb-4 justify-center">
+                    <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700">
+                      🇦🇪 Dubai
+                    </span>
+                  </div>
+
+                  <div className="flex gap-6 justify-center flex-wrap">
+                    {dubaiManagers.map(
+                      renderManagerBranch
+                    )}
+                  </div>
+
                 </div>
+              )}
 
-                <div className="flex gap-6 justify-center flex-wrap">
+            {/* Other offices */}
+            {otherOfficeManagers.length >
+              0 && (
+                <div>
 
-                  {dubaiManagers.map(
-                    (mgr) => (
+                  {Array.from(
+                    new Set(
+                      otherOfficeManagers.map(
+                        (m) =>
+                          String(
+                            m.office ||
+                            'Other'
+                          )
+                      )
+                    )
+                  ).map(
+                    (officeName) => (
                       <div
-                        key={mgr.id}
-                        className="flex flex-col items-center gap-3"
+                        key={officeName}
+                        className="mb-8"
                       >
 
-                        <div className="w-px h-6 bg-border" />
-
-                        <div className="w-48">
-                          <EmployeeCard
-                            emp={mgr}
-                            onClick={() =>
-                              setSelectedId(
-                                mgr.id
-                              )
-                            }
-                            liveCount={
-                              leadCountByEmp[
-                              mgr.id
-                              ]
-                            }
-                          />
+                        <div className="flex items-center gap-2 mb-4 justify-center">
+                          <span className="px-3 py-1 rounded-full text-xs font-semibold bg-muted text-muted-foreground">
+                            {officeName}
+                          </span>
                         </div>
 
-                        {agentsByManager[
-                          mgr.id
-                        ]?.length > 0 && (
-                            <>
-                              <div className="w-px h-6 bg-border" />
-
-                              <div className="flex gap-3">
-
-                                {agentsByManager[
-                                  mgr.id
-                                ].map((agent) => (
-                                  <div
-                                    key={agent.id}
-                                    className="w-36"
-                                  >
-                                    <EmployeeCard
-                                      emp={agent}
-                                      size="small"
-                                      onClick={() =>
-                                        setSelectedId(
-                                          agent.id
-                                        )
-                                      }
-                                      liveCount={
-                                        leadCountByEmp[
-                                        agent.id
-                                        ]
-                                      }
-                                    />
-                                  </div>
-                                ))}
-
-                              </div>
-                            </>
-                          )}
+                        <div className="flex gap-6 justify-center flex-wrap">
+                          {otherOfficeManagers
+                            .filter(
+                              (m) =>
+                                String(
+                                  m.office ||
+                                  'Other'
+                                ) ===
+                                officeName
+                            )
+                            .map(
+                              renderManagerBranch
+                            )}
+                        </div>
 
                       </div>
                     )
                   )}
 
                 </div>
-              </div>
-            )}
+              )}
 
           </div>
         )}
 
-        {/* =====================================================
-            DIRECTORY
-        ===================================================== */}
-
+        {/* DIRECTORY */}
         {tab === 'directory' && (
           <div>
 
@@ -596,7 +796,9 @@ export default function OrgChart({
                 <input
                   value={search}
                   onChange={(e) =>
-                    setSearch(e.target.value)
+                    setSearch(
+                      e.target.value
+                    )
                   }
                   placeholder="Search employees…"
                   className="w-full pl-9 pr-4 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
@@ -606,157 +808,188 @@ export default function OrgChart({
 
             </div>
 
-            <table className="w-full">
+            <div className="overflow-x-auto">
 
-              <thead>
-                <tr className="border-b border-border">
+              <table className="w-full">
 
-                  {[
-                    'Employee',
-                    'Role',
-                    'Team',
-                    'Contact',
-                    'Join Date',
-                    'Status',
-                  ].map((h) => (
-                    <th
-                      key={h}
-                      className="px-5 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider"
-                    >
-                      {h}
-                    </th>
-                  ))}
+                <thead>
+                  <tr className="border-b border-border">
 
-                </tr>
-              </thead>
+                    {[
+                      'Employee',
+                      'Role',
+                      'Team',
+                      'Contact',
+                      'Join Date',
+                      'Status',
+                    ].map((h) => (
+                      <th
+                        key={h}
+                        className="px-5 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider"
+                      >
+                        {h}
+                      </th>
+                    ))}
 
-              <tbody>
+                  </tr>
+                </thead>
 
-                {filtered.map((emp) => {
+                <tbody>
 
-                  const colors =
-                    roleColors[emp.role]
+                  {filtered.map(
+                    (emp) => {
 
-                  return (
-                    <tr
-                      key={emp.id}
-                      onClick={() =>
-                        setSelectedId(emp.id)
-                      }
-                      className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
-                    >
+                      const colors =
+                        roleColors[
+                        emp.role
+                        ] || roleColors.manager
 
-                      <td className="px-5 py-4">
-
-                        <div className="flex items-center gap-3">
-
-                          <div
-                            className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold"
-                            style={{
-                              backgroundColor:
-                                colors.bg,
-                              color:
-                                colors.text,
-                              border:
-                                `1px solid ${colors.border}`,
-                            }}
-                          >
-                            {emp.name
-                              .split(' ')
-                              .map((n) => n[0])
-                              .join('')}
-                          </div>
-
-                          <div>
-                            <p className="text-sm font-semibold text-foreground">
-                              {emp.name}
-                            </p>
-
-                            <p className="text-xs text-muted-foreground">
-                              {emp.department}
-                            </p>
-                          </div>
-
-                        </div>
-
-                      </td>
-
-                      <td className="px-5 py-4">
-
-                        <span
-                          className="text-xs font-medium px-2.5 py-1 rounded-full"
-                          style={{
-                            backgroundColor:
-                              colors.bg,
-                            color:
-                              emp.role === 'admin'
-                                ? '#FAF8F5'
-                                : colors.text,
-                          }}
+                      return (
+                        <tr
+                          key={emp.id}
+                          onClick={() =>
+                            setSelectedId(
+                              emp.id
+                            )
+                          }
+                          className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
                         >
-                          {roleLabels[emp.role]}
-                        </span>
 
-                      </td>
+                          <td className="px-5 py-4">
 
-                      <td className="px-5 py-4 text-sm text-muted-foreground">
-                        {emp.team}
-                      </td>
+                            <div className="flex items-center gap-3">
 
-                      <td className="px-5 py-4">
+                              <div
+                                className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold"
+                                style={{
+                                  backgroundColor:
+                                    colors.bg,
+                                  color:
+                                    colors.text,
+                                  border:
+                                    `1px solid ${colors.border}`,
+                                }}
+                              >
+                                {emp.name
+                                  .split(' ')
+                                  .map(
+                                    (n) =>
+                                      n[0]
+                                  )
+                                  .join('')}
+                              </div>
 
-                        <div className="space-y-0.5">
+                              <div>
 
-                          <p className="text-xs text-muted-foreground flex items-center gap-1">
-                            <Mail size={11} />
-                            {emp.email.split('@')[0]}@…
-                          </p>
+                                <p className="text-sm font-semibold text-foreground">
+                                  {emp.name}
+                                </p>
 
-                          <p className="text-xs text-muted-foreground flex items-center gap-1">
-                            <Phone size={11} />
-                            {emp.phone}
-                          </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {emp.department}
+                                </p>
 
-                        </div>
+                              </div>
 
-                      </td>
+                            </div>
 
-                      <td className="px-5 py-4 text-sm text-muted-foreground">
-                        {emp.joinDate}
-                      </td>
+                          </td>
 
-                      <td className="px-5 py-4">
+                          <td className="px-5 py-4">
 
-                        <span
-                          className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${emp.status === 'active'
-                              ? 'bg-emerald-50 text-emerald-700'
-                              : 'bg-amber-50 text-amber-700'
-                            }`}
-                        >
-                          {emp.status === 'active'
-                            ? 'Active'
-                            : 'On Leave'}
-                        </span>
+                            <span
+                              className="text-xs font-medium px-2.5 py-1 rounded-full"
+                              style={{
+                                backgroundColor:
+                                  colors.bg,
+                                color:
+                                  emp.role ===
+                                    'admin'
+                                    ? '#FAF8F5'
+                                    : colors.text,
+                              }}
+                            >
+                              {
+                                roleLabels[
+                                emp.role
+                                ]
+                              }
+                            </span>
 
-                      </td>
+                          </td>
 
-                    </tr>
-                  )
-                })}
+                          <td className="px-5 py-4 text-sm text-muted-foreground">
+                            {emp.team}
+                          </td>
 
-              </tbody>
+                          <td className="px-5 py-4">
 
-            </table>
+                            <div className="space-y-0.5">
+
+                              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                <Mail
+                                  size={11}
+                                />
+                                {emp.email ||
+                                  '—'}
+                              </p>
+
+                              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                <Phone
+                                  size={11}
+                                />
+                                {emp.phone ||
+                                  '—'}
+                              </p>
+
+                            </div>
+
+                          </td>
+
+                          <td className="px-5 py-4 text-sm text-muted-foreground">
+                            {emp.joinDate}
+                          </td>
+
+                          <td className="px-5 py-4">
+
+                            <span
+                              className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${emp.status ===
+                                  'active'
+                                  ? 'bg-emerald-50 text-emerald-700'
+                                  : emp.status ===
+                                    'on-leave'
+                                    ? 'bg-amber-50 text-amber-700'
+                                    : 'bg-red-50 text-red-700'
+                                }`}
+                            >
+                              {emp.status ===
+                                'active'
+                                ? 'Active'
+                                : emp.status ===
+                                  'on-leave'
+                                  ? 'On Leave'
+                                  : 'Inactive'}
+                            </span>
+
+                          </td>
+
+                        </tr>
+                      )
+                    }
+                  )}
+
+                </tbody>
+
+              </table>
+
+            </div>
 
           </div>
         )}
 
       </div>
 
-      {/* =====================================================
-          EMPLOYEE DETAILS MODAL
-      ===================================================== */}
-
+      {/* EMPLOYEE DETAILS */}
       <Modal
         open={!!selected}
         onClose={() =>
@@ -774,9 +1007,13 @@ export default function OrgChart({
                 className="w-16 h-16 rounded-2xl flex items-center justify-center text-xl font-semibold font-serif shrink-0"
                 style={{
                   backgroundColor:
-                    roleColors[selected.role].bg,
+                    roleColors[
+                      selected.role
+                    ].bg,
                   color:
-                    roleColors[selected.role].text,
+                    roleColors[
+                      selected.role
+                    ].text,
                 }}
               >
                 {selected.name
@@ -798,7 +1035,8 @@ export default function OrgChart({
                   }}
                 >
                   {selected.department ||
-                    (selected.role === 'admin'
+                    (selected.role ===
+                      'admin'
                       ? 'Director'
                       : roleLabels[
                       selected.role
@@ -815,7 +1053,8 @@ export default function OrgChart({
                           selected.role
                         ].bg,
                       color:
-                        selected.role === 'admin'
+                        selected.role ===
+                          'admin'
                           ? '#FAF8F5'
                           : roleColors[
                             selected.role
@@ -852,7 +1091,8 @@ export default function OrgChart({
             <div
               className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-xl"
               style={{
-                backgroundColor: '#F5F2EC',
+                backgroundColor:
+                  '#F5F2EC',
               }}
             >
 
@@ -865,7 +1105,8 @@ export default function OrgChart({
                 </div>
 
                 <p className="text-sm font-medium text-foreground break-all">
-                  {selected.email}
+                  {selected.email ||
+                    '—'}
                 </p>
               </div>
 
@@ -878,7 +1119,8 @@ export default function OrgChart({
                 </div>
 
                 <p className="text-sm font-medium text-foreground">
-                  {selected.phone}
+                  {selected.phone ||
+                    '—'}
                 </p>
               </div>
 
@@ -891,8 +1133,11 @@ export default function OrgChart({
                 </div>
 
                 <p className="text-sm font-medium text-foreground">
-                  {selected.department} ·{' '}
-                  {selected.team}
+                  {selected.department ||
+                    '—'}{' '}
+                  ·{' '}
+                  {selected.team ||
+                    'Sales'}
                 </p>
               </div>
 
@@ -905,7 +1150,8 @@ export default function OrgChart({
                 </div>
 
                 <p className="text-sm font-medium text-foreground">
-                  {selected.joinDate}
+                  {selected.joinDate ||
+                    '—'}
                 </p>
               </div>
 
@@ -923,13 +1169,19 @@ export default function OrgChart({
                     />
 
                     <p className="font-serif text-xl font-semibold text-foreground">
+
                       {leadCountByEmp[
                         selected.id
                       ] ??
                         selected.leadsAssigned}
+
                       <span className="text-sm text-muted-foreground font-normal">
-                        /{selected.capacityLimit}
+                        /
+                        {
+                          selected.capacityLimit
+                        }
                       </span>
+
                     </p>
 
                     <p className="text-xs text-muted-foreground">
@@ -937,15 +1189,21 @@ export default function OrgChart({
                     </p>
 
                     <div className="mt-1">
+
                       <WorkloadBadge
                         status={getWorkloadStatus(
-                          enriched(selected)
+                          enriched(
+                            selected
+                          )
                         )}
                         pct={getCapacityPct(
-                          enriched(selected)
+                          enriched(
+                            selected
+                          )
                         )}
                         showBar
                       />
+
                     </div>
 
                   </div>
@@ -958,7 +1216,9 @@ export default function OrgChart({
                     />
 
                     <p className="font-serif text-xl font-semibold text-foreground">
-                      {selected.conversions}
+                      {
+                        selected.conversions
+                      }
                     </p>
 
                     <p className="text-xs text-muted-foreground">
@@ -974,7 +1234,10 @@ export default function OrgChart({
                     </p>
 
                     <p className="text-sm font-semibold text-foreground mt-1">
-                      {selected.responseTime}
+                      {
+                        selected.responseTime ||
+                        '—'
+                      }
                     </p>
 
                   </div>
@@ -993,7 +1256,9 @@ export default function OrgChart({
                 <p className="text-sm text-muted-foreground">
                   Reports to{' '}
                   <span className="font-semibold text-foreground">
-                    {selectedManager.name}
+                    {
+                      selectedManager.name
+                    }
                   </span>
                 </p>
 
