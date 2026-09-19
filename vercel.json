@@ -1,11 +1,12 @@
 {
-  "$comment": "OPTIONAL — only needed if you want ONE Vercel project serving both the frontend and the API on the same domain (so the frontend can call same-origin '/api/...' paths and VITE_API_URL can be left empty). This file is only picked up if your Vercel project's Root Directory is set to this 'parva' folder. If you'd rather run two separate Vercel projects (recommended — see DEPLOYMENT.md), delete this file; it is not required for that path and the two sub-projects will each auto-detect correctly on their own.",
   "version": 2,
   "builds": [
     {
       "src": "parva_crm/package.json",
       "use": "@vercel/static-build",
-      "config": { "distDir": "dist" }
+      "config": {
+        "distDir": "dist"
+      }
     },
     {
       "src": "backend/parva_backend_supabase/backend/api/index.js",
@@ -13,7 +14,13 @@
     }
   ],
   "routes": [
-    { "src": "/api/(.*)", "dest": "backend/parva_backend_supabase/backend/api/index.js" },
-    { "src": "/(.*)", "dest": "parva_crm/dist/$1" }
+    {
+      "src": "/api/(.*)",
+      "dest": "backend/parva_backend_supabase/backend/api/index.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "parva_crm/dist/$1"
+    }
   ]
 }
