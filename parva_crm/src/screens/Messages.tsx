@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { Send, ArrowLeft, Search, Paperclip, FileText, X as XIcon, MessageCircle, Phone, Mail, PhoneMissed, PhoneOff, PhoneIncoming, Plus, Video, Users, Check } from 'lucide-react'
 import { useData } from '../contexts/DataContext'
+import { supabase } from '../lib/supabase'
 import CallModal from '../components/ui/CallModal'
 import Modal from '../components/ui/Modal'
 import type { Role, CallLog, InternalEmail } from '../types'
@@ -61,17 +62,280 @@ function initials(name: string) {
 }
 
 function formatTime(ts: string) {
-  const d = new Date(ts.replace(' ', 'T'))
+  const normalized = ts.includes('T') ? ts : ts.replace(' ', 'T')
+  const hasTimezone = /Z$|[+-]\d{2}:\d{2}$/.test(normalized)
+  const d = new Date(hasTimezone ? normalized : `${normalized}Z`)
+
+  if (Number.isNaN(d.getTime())) return ''
+
   const today = new Date()
-  const isToday = d.toDateString() === today.toDateString()
-  if (isToday) return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })
-  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+  const isToday = d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }) ===
+    today.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })
+
+  if (isToday) {
+    return d.toLocaleTimeString('en-IN', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'Asia/Kolkata',
+    })
+  }
+
+  return d.toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'Asia/Kolkata',
+  })
 }
 
 function formatDuration(sec: number) {
   const m = Math.floor(sec / 60)
   const s = sec % 60
   return `${m}:${String(s).padStart(2, '0')}`
+}
+
+
+type PersistedCallMeta = {
+  call_type?: 'voice' | 'video'
+  group_id?: string
+  participant_ids?: string[]
+}
+
+function parseCallMeta(notes: string | null | undefined): PersistedCallMeta {
+  if (!notes) return {}
+  try {
+    const parsed = JSON.parse(notes)
+    return parsed && typeof parsed === 'object' ? parsed as PersistedCallMeta : {}
+  } catch {
+    return {}
+  }
+}
+
+function toUiCallLog(row: {
+  id: string
+  employee_id: string | null
+  contact_employee_id: string | null
+  direction: string
+  status: string
+  duration_seconds: number
+  notes: string | null
+  created_at: string
+}): CallLog {
+  const meta = parseCallMeta(row.notes)
+  const callerId = row.employee_id || ''
+  const calleeId = row.contact_employee_id || undefined
+  const statusMap: Record<string, CallLog['status']> = {
+    completed: 'Completed',
+    missed: 'Missed',
+    declined: 'Declined',
+  }
+
+  return {
+    id: row.id,
+    callerId,
+    calleeId,
+    groupId: meta.group_id,
+    participantIds: meta.participant_ids,
+    timestamp: row.created_at,
+    durationSec: Number(row.duration_seconds || 0),
+    status: statusMap[row.status] || 'Completed',
+    type: meta.call_type === 'video' ? 'video' : 'voice',
+  }
+}
+
+async function loadPersistentCallLogs(employeeId: string): Promise<CallLog[]> {
+  const { data, error } = await supabase
+    .from('call_logs')
+    .select('id, employee_id, contact_employee_id, direction, status, duration_seconds, notes, created_at')
+    .or(`employee_id.eq.${employeeId},contact_employee_id.eq.${employeeId}`)
+    .order('created_at', { ascending: false })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []).map((row) => toUiCallLog(row))
+}
+
+
+type PersistedEmailMeta = {
+  version: 1
+  group_id?: string
+  attachment_name?: string
+  attachment_url?: string
+}
+
+const EMAIL_META_PREFIX = '__PARVA_EMAIL_META__'
+
+function serializeEmailBody(body: string, meta: Omit<PersistedEmailMeta, 'version'>): string {
+  const payload: PersistedEmailMeta = { version: 1, ...meta }
+  return `${EMAIL_META_PREFIX}${JSON.stringify(payload)}\n${body}`
+}
+
+function parseEmailBody(rawBody: string | null | undefined): { body: string; meta: PersistedEmailMeta } {
+  if (!rawBody || !rawBody.startsWith(EMAIL_META_PREFIX)) {
+    return { body: rawBody || '', meta: { version: 1 } }
+  }
+
+  const newlineIndex = rawBody.indexOf('\n')
+  if (newlineIndex === -1) return { body: rawBody, meta: { version: 1 } }
+
+  try {
+    const meta = JSON.parse(rawBody.slice(EMAIL_META_PREFIX.length, newlineIndex)) as PersistedEmailMeta
+    return {
+      body: rawBody.slice(newlineIndex + 1),
+      meta: meta && typeof meta === 'object' ? meta : { version: 1 },
+    }
+  } catch {
+    return { body: rawBody, meta: { version: 1 } }
+  }
+}
+
+function toUiInternalEmail(row: {
+  id: string
+  sender_id: string | null
+  recipient_ids: string[] | null
+  subject: string
+  body: string
+  read_by: string[] | null
+  created_at: string
+}, activeEmployeeId: string): InternalEmail {
+  const parsed = parseEmailBody(row.body)
+  const senderId = row.sender_id || ''
+  const recipientIds = Array.isArray(row.recipient_ids) ? row.recipient_ids.map(String) : []
+  const isSender = senderId === activeEmployeeId
+  const read = isSender || (Array.isArray(row.read_by) && row.read_by.map(String).includes(activeEmployeeId))
+
+  return {
+    id: row.id,
+    senderId,
+    recipientIds,
+    recipientId: parsed.meta.group_id ? undefined : recipientIds[0],
+    groupId: parsed.meta.group_id,
+    subject: row.subject,
+    body: parsed.body,
+    timestamp: row.created_at,
+    read,
+    attachmentName: parsed.meta.attachment_name,
+    attachmentUrl: parsed.meta.attachment_url,
+  }
+}
+
+async function loadPersistentEmails(employeeId: string): Promise<InternalEmail[]> {
+  const [sentResult, receivedResult] = await Promise.all([
+    supabase
+      .from('internal_emails')
+      .select('id, sender_id, recipient_ids, subject, body, read_by, created_at')
+      .eq('sender_id', employeeId),
+    supabase
+      .from('internal_emails')
+      .select('id, sender_id, recipient_ids, subject, body, read_by, created_at')
+      .contains('recipient_ids', [employeeId]),
+  ])
+
+  if (sentResult.error) throw new Error(sentResult.error.message)
+  if (receivedResult.error) throw new Error(receivedResult.error.message)
+
+  const byId = new Map<string, {
+    id: string
+    sender_id: string | null
+    recipient_ids: string[] | null
+    subject: string
+    body: string
+    read_by: string[] | null
+    created_at: string
+  }>()
+
+  for (const row of [...(sentResult.data ?? []), ...(receivedResult.data ?? [])]) {
+    byId.set(row.id, row as typeof row & { id: string })
+  }
+
+  return Array.from(byId.values())
+    .map((row) => toUiInternalEmail(row, employeeId))
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+}
+
+async function insertPersistentEmail(input: {
+  senderId: string
+  recipientIds: string[]
+  subject: string
+  body: string
+  groupId?: string
+  attachmentName?: string
+  attachmentUrl?: string
+}) {
+  const storedBody = serializeEmailBody(input.body, {
+    ...(input.groupId ? { group_id: input.groupId } : {}),
+    ...(input.attachmentName ? { attachment_name: input.attachmentName } : {}),
+    ...(input.attachmentUrl ? { attachment_url: input.attachmentUrl } : {}),
+  })
+
+  const { data, error } = await supabase
+    .from('internal_emails')
+    .insert({
+      sender_id: input.senderId,
+      recipient_ids: input.recipientIds,
+      subject: input.subject,
+      body: storedBody,
+      read_by: [input.senderId],
+    })
+    .select('id, sender_id, recipient_ids, subject, body, read_by, created_at')
+    .single()
+
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error('Email was not returned after saving')
+
+  return toUiInternalEmail(data, input.senderId)
+}
+
+async function markPersistentEmailRead(emailId: string, employeeId: string) {
+  const { data: current, error: readError } = await supabase
+    .from('internal_emails')
+    .select('read_by')
+    .eq('id', emailId)
+    .single()
+
+  if (readError) throw new Error(readError.message)
+
+  const currentReadBy = Array.isArray(current?.read_by) ? current.read_by.map(String) : []
+  if (currentReadBy.includes(employeeId)) return
+
+  const { error } = await supabase
+    .from('internal_emails')
+    .update({ read_by: [...currentReadBy, employeeId] })
+    .eq('id', emailId)
+
+  if (error) throw new Error(error.message)
+}
+
+async function insertPersistentCallLog(input: {
+  employeeId: string
+  contactEmployeeId?: string | null
+  durationSeconds: number
+  callType: 'voice' | 'video'
+  groupId?: string
+  participantIds?: string[]
+}) {
+  const notes: PersistedCallMeta = {
+    call_type: input.callType,
+    ...(input.groupId ? { group_id: input.groupId } : {}),
+    ...(input.participantIds ? { participant_ids: input.participantIds } : {}),
+  }
+
+  const { data, error } = await supabase
+    .from('call_logs')
+    .insert({
+      employee_id: input.employeeId,
+      contact_employee_id: input.contactEmployeeId ?? null,
+      lead_id: null,
+      direction: 'outgoing',
+      status: 'completed',
+      duration_seconds: input.durationSeconds,
+      notes: JSON.stringify(notes),
+    })
+    .select('id, employee_id, contact_employee_id, direction, status, duration_seconds, notes, created_at')
+    .single()
+
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error('Call log was not returned after saving')
+  return toUiCallLog(data)
 }
 
 interface MessagesProps {
@@ -159,6 +423,60 @@ export default function Messages({
         console.error('Could not load all employees from Supabase:', err)
       })
   }, [currentUserId])
+
+  // Load persistent call history from Supabase for this employee.
+  useEffect(() => {
+    let active = true
+    if (!activeEmployeeId) return
+
+    void loadPersistentCallLogs(activeEmployeeId)
+      .then((logs) => {
+        if (active) setCallLogsList(logs)
+      })
+      .catch((error) => {
+        if (active) {
+          console.error('Could not load call logs:', error)
+        }
+      })
+
+    return () => {
+      active = false
+    }
+  }, [activeEmployeeId, setCallLogsList])
+
+  // Load persistent internal email history for this employee.
+  useEffect(() => {
+    let active = true
+    if (!activeEmployeeId) return
+
+    void loadPersistentEmails(activeEmployeeId)
+      .then((loaded) => {
+        if (active) setEmailsList(loaded)
+      })
+      .catch((error) => {
+        if (active) console.error('Could not load internal emails:', error)
+      })
+
+    const channel = supabase
+      .channel(`internal-emails-${activeEmployeeId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'internal_emails' },
+        () => {
+          void loadPersistentEmails(activeEmployeeId)
+            .then((loaded) => {
+              if (active) setEmailsList(loaded)
+            })
+            .catch((error) => console.error('Realtime email reload failed:', error))
+        }
+      )
+      .subscribe()
+
+    return () => {
+      active = false
+      void supabase.removeChannel(channel)
+    }
+  }, [activeEmployeeId, setEmailsList])
 
   // Combine database employees with DataContext fallback
   const allEmployees = useMemo(() => {
@@ -363,15 +681,27 @@ export default function Messages({
   }, [selected?.thread.length, selectedGroupConvo?.thread.length, selectedId])
 
   useEffect(() => {
-    if (tab === 'email' && selectedId) {
-      if (selectedGroupConvo) {
-        setEmails((prev) => prev.map((e) => (e.groupId === selectedId ? { ...e, read: true } : e)))
-      } else {
-        setEmails((prev) => prev.map((e) => (e.senderId === selectedId && e.recipientId === activeEmployeeId ? { ...e, read: true } : e)))
-      }
-    }
+    if (tab !== 'email' || !selectedId || !activeEmployeeId) return
+
+    const unread = emails.filter((email) => {
+      if (email.read) return false
+      if (selectedGroupConvo) return email.groupId === selectedId
+      return email.senderId === selectedId && email.recipientId === activeEmployeeId
+    })
+
+    if (unread.length === 0) return
+
+    void Promise.all(
+      unread.map((email) => markPersistentEmailRead(email.id, activeEmployeeId).catch((error) => {
+        console.error('Could not mark email as read:', error)
+      }))
+    ).then(() => {
+      setEmails((prev) =>
+        prev.map((email) => (unread.some((item) => item.id === email.id) ? { ...email, read: true } : email))
+      )
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, selectedId, activeEmployeeId])
+  }, [tab, selectedId, activeEmployeeId, selectedGroupConvo?.group.id, emails.length])
 
   const openConversation = async (contactId: string) => {
     setSelectedId(contactId)
@@ -453,35 +783,43 @@ export default function Messages({
     e.target.value = ''
   }
 
-  const endCall = (durationSec: number) => {
-    if (activeCallGroupId) {
-      const group = chatState.groups.find((g) => g.id === activeCallGroupId)
-      const newCall: CallLog = {
-        id: `call-${Date.now()}`,
-        callerId: activeEmployeeId,
-        groupId: activeCallGroupId,
-        participantIds: group?.memberIds || [activeEmployeeId],
-        timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
-        durationSec,
-        status: 'Completed',
-        type: activeCallType,
+  const endCall = async (durationSec: number) => {
+    try {
+      if (activeCallGroupId) {
+        const group = chatState.groups.find((g) => g.id === activeCallGroupId)
+        const participantIds = group?.memberIds || [activeEmployeeId]
+
+        const saved = await insertPersistentCallLog({
+          employeeId: activeEmployeeId,
+          contactEmployeeId: null,
+          durationSeconds: durationSec,
+          callType: activeCallType,
+          groupId: activeCallGroupId,
+          participantIds,
+        })
+
+        setCallLogs((prev) => [saved, ...prev.filter((c) => c.id !== saved.id)])
+        setActiveCallGroupId(null)
+        return
       }
-      setCallLogs((prev) => [...prev, newCall])
+
+      if (!activeCallWith) return
+
+      const saved = await insertPersistentCallLog({
+        employeeId: activeEmployeeId,
+        contactEmployeeId: activeCallWith,
+        durationSeconds: durationSec,
+        callType: activeCallType,
+      })
+
+      setCallLogs((prev) => [saved, ...prev.filter((c) => c.id !== saved.id)])
+      setActiveCallWith(null)
+    } catch (error) {
+      console.error('Could not save call log:', error)
+      setChatError(error instanceof Error ? error.message : 'Could not save call history.')
       setActiveCallGroupId(null)
-      return
+      setActiveCallWith(null)
     }
-    if (!activeCallWith) return
-    const newCall: CallLog = {
-      id: `call-${Date.now()}`,
-      callerId: activeEmployeeId,
-      calleeId: activeCallWith,
-      timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
-      durationSec,
-      status: 'Completed',
-      type: activeCallType,
-    }
-    setCallLogs((prev) => [...prev, newCall])
-    setActiveCallWith(null)
   }
 
   const startCall = (contactId: string, type: 'voice' | 'video') => {
@@ -503,43 +841,36 @@ export default function Messages({
     e.target.value = ''
   }
 
-  const sendEmail = () => {
-    if (!composeForm.subject.trim()) return
-    if (selectedGroupConvo) {
-      const newEmail: InternalEmail = {
-        id: `iemail-${Date.now()}`,
+  const sendEmail = async () => {
+    if (!composeForm.subject.trim() || !activeEmployeeId) return
+
+    try {
+      const recipientIds = selectedGroupConvo
+        ? selectedGroupConvo.group.memberIds.filter((id) => id !== activeEmployeeId)
+        : selectedId
+          ? [selectedId]
+          : []
+
+      if (recipientIds.length === 0) return
+
+      const saved = await insertPersistentEmail({
         senderId: activeEmployeeId,
-        groupId: selectedGroupConvo.group.id,
-        recipientIds: selectedGroupConvo.group.memberIds.filter((id) => id !== activeEmployeeId),
+        recipientIds,
         subject: composeForm.subject.trim(),
         body: composeForm.body.trim(),
-        timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
-        read: true,
+        groupId: selectedGroupConvo?.group.id,
         attachmentName: composeAttachment?.name,
         attachmentUrl: composeAttachment?.url,
-      }
-      setEmails((prev) => [...prev, newEmail])
+      })
+
+      setEmails((prev) => [saved, ...prev.filter((email) => email.id !== saved.id)])
       setComposeForm({ subject: '', body: '' })
       setComposeAttachment(null)
       setShowCompose(false)
-      return
+    } catch (error) {
+      console.error('Could not send internal email:', error)
+      setChatError(error instanceof Error ? error.message : 'Could not send email.')
     }
-    if (!selectedId) return
-    const newEmail: InternalEmail = {
-      id: `iemail-${Date.now()}`,
-      senderId: activeEmployeeId,
-      recipientId: selectedId,
-      subject: composeForm.subject.trim(),
-      body: composeForm.body.trim(),
-      timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
-      read: true,
-      attachmentName: composeAttachment?.name,
-      attachmentUrl: composeAttachment?.url,
-    }
-    setEmails((prev) => [...prev, newEmail])
-    setComposeForm({ subject: '', body: '' })
-    setComposeAttachment(null)
-    setShowCompose(false)
   }
 
   const toggleNewGroupMember = (id: string) => {
