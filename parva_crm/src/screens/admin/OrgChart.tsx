@@ -17,7 +17,6 @@ import type { Role, Group, Employee } from '../../types'
 import {
   getWorkloadStatus,
   getCapacityPct,
-  getWorkloadColor,
 } from '../../utils/aiAssignment'
 
 const roleColors: Record<
@@ -63,11 +62,6 @@ type DbEmployee = {
   status: string
   manager_id: string | null
   office_id: string | null
-  join_date?: string | null
-  created_at?: string | null
-  capacity_limit?: number | null
-  conversions?: number | null
-  response_time?: string | null
   offices?: {
     id: string
     name: string
@@ -107,19 +101,14 @@ function mapDbEmployee(row: DbEmployee): OrgEmployee {
           : (officeName as Employee['office']),
     team: row.department || 'Sales',
     managerId: row.manager_id ?? undefined,
-    joinDate:
-      row.join_date ||
-      (row.created_at
-        ? new Date(row.created_at).toLocaleDateString(
-          'en-IN'
-        )
-        : '—'),
-    capacityLimit:
-      row.capacity_limit ?? 0,
+
+    // These fields are not stored in employees.
+    // They remain safe defaults for the existing UI.
+    joinDate: '—',
+    capacityLimit: 0,
     leadsAssigned: 0,
-    conversions: row.conversions ?? 0,
-    responseTime:
-      row.response_time ?? '—',
+    conversions: 0,
+    responseTime: '—',
   }
 }
 
@@ -137,23 +126,20 @@ function EmployeeCard({
   const colors =
     roleColors[emp.role] || roleColors.manager
 
+  const isAgent = emp.role === 'agent'
+
+  const leadsAssigned =
+    liveCount !== undefined
+      ? liveCount
+      : emp.leadsAssigned || 0
+
   const enrichedEmp = {
     ...emp,
-    leadsAssigned:
-      liveCount !== undefined
-        ? liveCount
-        : emp.leadsAssigned,
-  }
+    leadsAssigned,
+  } as Employee
 
-  const wStatus =
-    emp.role === 'agent'
-      ? getWorkloadStatus(
-        enrichedEmp as Employee
-      )
-      : null
-
-  const wColor = wStatus
-    ? getWorkloadColor(wStatus)
+  const workloadStatus = isAgent
+    ? getWorkloadStatus(enrichedEmp)
     : null
 
   return (
@@ -161,19 +147,20 @@ function EmployeeCard({
       onClick={onClick}
       className="w-full bg-card rounded-xl border shadow-sm p-4 text-center transition-all hover:shadow-md hover:-translate-y-0.5 relative"
       style={{
-        borderColor:
-          wColor
-            ? wColor + '60'
-            : colors.border,
+        borderColor: colors.border,
       }}
     >
-      {wColor && (
+      {isAgent && (
         <span
           className="absolute top-2 right-2 w-2.5 h-2.5 rounded-full"
           style={{
-            backgroundColor: wColor,
+            backgroundColor:
+              workloadStatus === 'overloaded'
+                ? '#DC2626'
+                : workloadStatus === 'high'
+                  ? '#F59E0B'
+                  : '#10B981',
           }}
-          title={`Workload: ${wStatus}`}
         />
       )}
 
@@ -228,12 +215,9 @@ function EmployeeCard({
 
       {size !== 'small' && (
         <div className="mt-2 pt-2 border-t border-border space-y-0.5">
-
           <p className="text-xs text-muted-foreground flex items-center justify-center gap-1">
             <Mail size={10} />
-            {emp.email
-              ? emp.email.split('@')[0]
-              : 'No email'}
+            {emp.email || 'No email'}
           </p>
 
           <p className="text-[10px] font-medium text-accent">
@@ -242,20 +226,11 @@ function EmployeeCard({
               'Sales'}
           </p>
 
-          {liveCount !== undefined &&
-            emp.role === 'agent' && (
-              <p
-                className="text-xs font-medium"
-                style={{
-                  color:
-                    wColor || '#7A7065',
-                }}
-              >
-                {liveCount}/
-                {emp.capacityLimit} leads
-              </p>
-            )}
-
+          {isAgent && (
+            <p className="text-xs font-medium text-muted-foreground">
+              {leadsAssigned} leads
+            </p>
+          )}
         </div>
       )}
     </button>
@@ -320,11 +295,6 @@ export default function OrgChart({
           status,
           manager_id,
           office_id,
-          join_date,
-          created_at,
-          capacity_limit,
-          conversions,
-          response_time,
           offices (
             id,
             name
@@ -347,12 +317,12 @@ export default function OrgChart({
         return
       }
 
-      setEmployees(
+      const mapped =
         ((data || []) as DbEmployee[]).map(
           mapDbEmployee
         )
-      )
 
+      setEmployees(mapped)
       setLoadingEmployees(false)
     }
 
@@ -399,14 +369,6 @@ export default function OrgChart({
       ])
     )
 
-  const enriched = (emp: OrgEmployee) =>
-    ({
-      ...emp,
-      leadsAssigned:
-        leadCountByEmp[emp.id] ??
-        emp.leadsAssigned,
-    }) as Employee
-
   const admin =
     employees.find(
       (e) => e.role === 'admin'
@@ -427,7 +389,7 @@ export default function OrgChart({
       (m) => m.office === 'Dubai'
     )
 
-  const otherOfficeManagers =
+  const otherManagers =
     managers.filter(
       (m) =>
         m.office !== 'Bangalore' &&
@@ -453,14 +415,10 @@ export default function OrgChart({
       (e) =>
         e.name
           .toLowerCase()
-          .includes(
-            search.toLowerCase()
-          ) ||
+          .includes(search.toLowerCase()) ||
         e.email
           .toLowerCase()
-          .includes(
-            search.toLowerCase()
-          )
+          .includes(search.toLowerCase())
     )
 
   const messageTeam = () => {
@@ -543,6 +501,7 @@ export default function OrgChart({
           <h2 className="font-serif text-lg text-foreground">
             Could not load organization
           </h2>
+
           <p className="text-sm text-red-500 mt-2">
             {employeeError}
           </p>
@@ -558,16 +517,16 @@ export default function OrgChart({
           <h2 className="font-serif text-lg text-foreground">
             Organization data unavailable
           </h2>
+
           <p className="text-sm text-muted-foreground mt-2">
-            The employee list loaded, but no
-            Super Admin record was found.
+            No Super Admin employee was found.
           </p>
         </div>
       </div>
     )
   }
 
-  const renderManagerBranch = (
+  const renderManager = (
     manager: OrgEmployee
   ) => (
     <div
@@ -626,9 +585,9 @@ export default function OrgChart({
   return (
     <div className="space-y-6">
 
-      {/* Tabs */}
       <div className="bg-card rounded-xl border border-border shadow-sm">
 
+        {/* TABS */}
         <div className="border-b border-border px-5 flex gap-6">
 
           {(['chart', 'directory'] as const).map(
@@ -663,7 +622,7 @@ export default function OrgChart({
         {tab === 'chart' && (
           <div className="p-4 sm:p-8 overflow-x-auto">
 
-            {/* Chaitra */}
+            {/* CHAITRA */}
             <div className="flex justify-center mb-6">
               <div className="w-56">
                 <EmployeeCard
@@ -687,92 +646,66 @@ export default function OrgChart({
               <div className="w-px h-8 bg-border" />
             </div>
 
-            {/* India */}
+            {/* INDIA */}
             {bangaloreManagers.length >
               0 && (
                 <div className="mb-8">
 
                   <div className="flex items-center gap-2 mb-4 justify-center">
+
                     <span className="px-3 py-1 rounded-full text-xs font-semibold bg-sky-50 text-sky-700">
                       🇮🇳 India
                     </span>
+
                   </div>
 
                   <div className="flex gap-6 justify-center flex-wrap">
+
                     {bangaloreManagers.map(
-                      renderManagerBranch
+                      renderManager
                     )}
+
                   </div>
 
                 </div>
               )}
 
-            {/* Dubai */}
+            {/* DUBAI */}
             {dubaiManagers.length >
               0 && (
                 <div className="mb-8">
 
                   <div className="flex items-center gap-2 mb-4 justify-center">
+
                     <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700">
                       🇦🇪 Dubai
                     </span>
+
                   </div>
 
                   <div className="flex gap-6 justify-center flex-wrap">
+
                     {dubaiManagers.map(
-                      renderManagerBranch
+                      renderManager
                     )}
+
                   </div>
 
                 </div>
               )}
 
-            {/* Other offices */}
-            {otherOfficeManagers.length >
+            {/* OTHER OFFICES */}
+            {otherManagers.length >
               0 && (
-                <div>
+                <div className="mb-8">
 
-                  {Array.from(
-                    new Set(
-                      otherOfficeManagers.map(
-                        (m) =>
-                          String(
-                            m.office ||
-                            'Other'
-                          )
-                      )
-                    )
-                  ).map(
-                    (officeName) => (
-                      <div
-                        key={officeName}
-                        className="mb-8"
-                      >
+                  <div className="flex gap-6 justify-center flex-wrap">
 
-                        <div className="flex items-center gap-2 mb-4 justify-center">
-                          <span className="px-3 py-1 rounded-full text-xs font-semibold bg-muted text-muted-foreground">
-                            {officeName}
-                          </span>
-                        </div>
+                    {otherManagers.map(
+                      renderManager
+                    )}
 
-                        <div className="flex gap-6 justify-center flex-wrap">
-                          {otherOfficeManagers
-                            .filter(
-                              (m) =>
-                                String(
-                                  m.office ||
-                                  'Other'
-                                ) ===
-                                officeName
-                            )
-                            .map(
-                              renderManagerBranch
-                            )}
-                        </div>
-
-                      </div>
-                    )
-                  )}
+                  </div>
 
                 </div>
               )}
@@ -842,7 +775,8 @@ export default function OrgChart({
                       const colors =
                         roleColors[
                         emp.role
-                        ] || roleColors.manager
+                        ] ||
+                        roleColors.manager
 
                       return (
                         <tr
@@ -886,7 +820,8 @@ export default function OrgChart({
                                 </p>
 
                                 <p className="text-xs text-muted-foreground">
-                                  {emp.department}
+                                  {emp.department ||
+                                    'Sales'}
                                 </p>
 
                               </div>
@@ -919,7 +854,9 @@ export default function OrgChart({
                           </td>
 
                           <td className="px-5 py-4 text-sm text-muted-foreground">
-                            {emp.team}
+                            {emp.team ||
+                              emp.department ||
+                              'Sales'}
                           </td>
 
                           <td className="px-5 py-4">
@@ -947,7 +884,7 @@ export default function OrgChart({
                           </td>
 
                           <td className="px-5 py-4 text-sm text-muted-foreground">
-                            {emp.joinDate}
+                            —
                           </td>
 
                           <td className="px-5 py-4">
@@ -1150,8 +1087,7 @@ export default function OrgChart({
                 </div>
 
                 <p className="text-sm font-medium text-foreground">
-                  {selected.joinDate ||
-                    '—'}
+                  —
                 </p>
               </div>
 
@@ -1172,15 +1108,7 @@ export default function OrgChart({
 
                       {leadCountByEmp[
                         selected.id
-                      ] ??
-                        selected.leadsAssigned}
-
-                      <span className="text-sm text-muted-foreground font-normal">
-                        /
-                        {
-                          selected.capacityLimit
-                        }
-                      </span>
+                      ] ?? 0}
 
                     </p>
 
@@ -1192,14 +1120,22 @@ export default function OrgChart({
 
                       <WorkloadBadge
                         status={getWorkloadStatus(
-                          enriched(
-                            selected
-                          )
+                          {
+                            ...selected,
+                            leadsAssigned:
+                              leadCountByEmp[
+                              selected.id
+                              ] ?? 0,
+                          } as Employee
                         )}
                         pct={getCapacityPct(
-                          enriched(
-                            selected
-                          )
+                          {
+                            ...selected,
+                            leadsAssigned:
+                              leadCountByEmp[
+                              selected.id
+                              ] ?? 0,
+                          } as Employee
                         )}
                         showBar
                       />
@@ -1216,28 +1152,11 @@ export default function OrgChart({
                     />
 
                     <p className="font-serif text-xl font-semibold text-foreground">
-                      {
-                        selected.conversions
-                      }
+                      0
                     </p>
 
                     <p className="text-xs text-muted-foreground">
                       Conversions
-                    </p>
-
-                  </div>
-
-                  <div className="p-4 rounded-xl border border-border text-center col-span-2">
-
-                    <p className="text-xs text-muted-foreground">
-                      Avg. Response Time
-                    </p>
-
-                    <p className="text-sm font-semibold text-foreground mt-1">
-                      {
-                        selected.responseTime ||
-                        '—'
-                      }
                     </p>
 
                   </div>
