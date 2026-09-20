@@ -26,6 +26,7 @@ import type {
 } from './types'
 
 import { supabase } from './lib/supabase'
+import { getCurrentEmployee } from './services/chatService'
 import {
   DataProvider,
   useData,
@@ -172,119 +173,52 @@ function AuthenticatedApp({
     darkMode,
     setDarkMode,
   ] = useState(false)
-
   /*
-   * ============================================================
-   * NOTIFICATIONS
-   * ============================================================
-   */
+  * ============================================================
+  * LOAD EMPLOYEE SETTINGS
+  * ============================================================
+  *
+  * Uses the same authenticated-user -> employee resolution
+  * already used by the chat system.
+  */
+  useEffect(() => {
+    let active = true
 
-  const [
-    notifs,
-    setNotifs,
-  ] = useState<
-    Notification[]
-  >([])
+    const loadEmployeeSettings = async () => {
+      try {
+        const employee = await getCurrentEmployee()
 
-  /*
-   * ============================================================
-   * OTHER CURRENT APP STATE
-   * ============================================================
-   */
+        const { data, error } = await supabase
+          .from('employee_settings')
+          .select('dark_mode')
+          .eq('employee_id', employee.id)
+          .maybeSingle()
 
-  const [
-    groupList,
-    setGroupList,
-  ] = useState<Group[]>(
-    initialGroups
-  )
+        if (error) {
+          console.error(
+            'Failed to load employee settings:',
+            error.message
+          )
+          return
+        }
 
-  const [
-    auditLog,
-    setAuditLog,
-  ] = useState<
-    AuditEntry[]
-  >(initialAuditLog)
+        if (!active || !data) return
 
-  const [
-    flagList,
-    setFlagList,
-  ] = useState<Flag[]>(
-    initialFlags
-  )
+        setDarkMode(Boolean(data.dark_mode))
+      } catch (err) {
+        console.error(
+          'Failed to load employee settings:',
+          err
+        )
+      }
+    }
 
-  const [
-    visitList,
-    setVisitList,
-  ] = useState<SiteVisit[]>(
-    initialSiteVisits
-  )
+    void loadEmployeeSettings()
 
-  const [
-    unitPhotos,
-    setUnitPhotos,
-  ] = useState<
-    Record<string, string[]>
-  >({})
-
-  const [
-    escalations,
-    setEscalations,
-  ] =
-    useState<EscalationRequest[]>(
-      initialEscalations
-    )
-
-  const [
-    msgList,
-    setMsgList,
-  ] =
-    useState<Message[]>(
-      initialMessages
-    )
-
-  const [
-    callLogsList,
-    setCallLogsList,
-  ] =
-    useState<CallLog[]>(
-      initialCallLogs
-    )
-
-  const [
-    emailsList,
-    setEmailsList,
-  ] =
-    useState<InternalEmail[]>(
-      initialEmails
-    )
-
-  const [
-    groupMsgsList,
-    setGroupMsgsList,
-  ] =
-    useState<GroupMessage[]>(
-      initialGroupMessages
-    )
-
-  /*
-   * ============================================================
-   * NAVIGATION
-   * ============================================================
-   */
-
-  const navigate = (
-    nextScreen: string,
-    nextParams?: Record<
-      string,
-      string
-    >
-  ) => {
-    setScreen(nextScreen)
-    setParams(
-      nextParams || {}
-    )
-  }
+    return () => {
+      active = false
+    }
+  }, [currentUser.id])
 
   /*
    * ============================================================
