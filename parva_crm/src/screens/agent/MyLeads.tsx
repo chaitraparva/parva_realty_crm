@@ -4,7 +4,7 @@ import { siteVisits } from '../../data/mockData'
 import { useData, mapLead } from '../../contexts/DataContext'
 import { leadsApi, ApiError } from '../../services/api'
 import { getCurrentEmployeeSettings } from '../../services/employeeSettings'
-import { getMissedFollowUpNotifications } from '../../services/notificationAutomation'
+import { getMissedFollowUpNotifications, getUnassignedLeadNotifications } from '../../services/notificationAutomation'
 import { supabase } from '../../lib/supabase'
 import { StatusBadge, LeadScoreBadge } from '../../components/ui/Badge'
 import KPICard from '../../components/ui/KPICard'
@@ -150,6 +150,104 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
       active = false
     }
   }, [agentLeads, currentUserId])
+
+  /*
+   * ============================================================
+   * UNASSIGNED LEAD NOTIFICATIONS
+   * ============================================================
+   *
+   * Managers are notified about unassigned leads in their office.
+   * Admins are notified about unassigned leads across the company.
+   * Existing notifications are checked first so refreshes do not
+   * create duplicate alerts.
+   */
+  useEffect(() => {
+    if (
+      !currentUserId ||
+      !onAddNotification ||
+      agentLeads.length === 0 ||
+      (role !== 'manager' && role !== 'admin')
+    ) {
+      return
+    }
+
+    let active = true
+
+    const checkUnassignedLeads = async () => {
+      try {
+        const settings = await getCurrentEmployeeSettings()
+
+        if (!settings.notifUnassigned) {
+          return
+        }
+
+        const currentEmployee = employees.find(
+          (employee) => employee.id === currentUserId
+        )
+
+        const candidates = getUnassignedLeadNotifications(
+          agentLeads,
+          currentUserId,
+          currentEmployee?.office,
+          role,
+          settings
+        )
+
+        if (candidates.length === 0) {
+          return
+        }
+
+        const { data, error } = await supabase
+          .from('notifications')
+          .select('link')
+          .eq('employee_id', currentUserId)
+          .eq('type', 'unassigned-lead')
+
+        if (error) {
+          throw error
+        }
+
+        if (!active) {
+          return
+        }
+
+        const existingLinks = new Set(
+          (data ?? [])
+            .map((notification) => notification.link)
+            .filter(
+              (link): link is string =>
+                typeof link === 'string' && link.length > 0
+            )
+        )
+
+        for (const notification of candidates) {
+          if (
+            notification.link &&
+            existingLinks.has(notification.link)
+          ) {
+            continue
+          }
+
+          onAddNotification(notification)
+
+          if (notification.link) {
+            existingLinks.add(notification.link)
+          }
+        }
+      } catch (err) {
+        console.error(
+          'Failed to check unassigned lead alerts:',
+          err
+        )
+      }
+    }
+
+    void checkUnassignedLeads()
+
+    return () => {
+      active = false
+    }
+  }, [agentLeads, currentUserId, role, employees])
 
   const submitNewLead = async () => {
     if (!newLeadForm.name.trim() || !newLeadForm.phone.trim()) return
