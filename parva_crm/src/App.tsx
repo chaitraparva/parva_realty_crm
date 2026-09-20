@@ -173,6 +173,17 @@ function AuthenticatedApp({
     darkMode,
     setDarkMode,
   ] = useState(false)
+
+  /*
+   * ============================================================
+   * NOTIFICATIONS
+   * ============================================================
+   */
+
+  const [
+    notifs,
+    setNotifs,
+  ] = useState<Notification[]>([])
   /*
   * ============================================================
   * LOAD EMPLOYEE SETTINGS
