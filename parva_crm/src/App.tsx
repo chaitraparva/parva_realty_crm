@@ -888,11 +888,7 @@ function AuthenticatedApp({
 
         case 'team-overview':
           return (
-            <TeamOverview
-              navigate={
-                navigate
-              }
-            />
+            <TeamOverview />
           )
 
         case 'pipeline':

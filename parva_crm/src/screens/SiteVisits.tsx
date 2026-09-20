@@ -147,6 +147,17 @@ export default function SiteVisits({
   ] = useState<SiteVisit[]>([])
 
   const [
+    projects,
+    setProjects,
+  ] = useState<
+    {
+      id: string
+      name: string
+      location: string
+    }[]
+  >([])
+
+  const [
     loading,
     setLoading,
   ] = useState(true)
@@ -485,6 +496,16 @@ export default function SiteVisits({
       setVisitList(mapped)
     }
 
+  const loadProjects = async () => {
+    const { data: pData } = await supabase
+      .from('inventory_projects')
+      .select('id, name, location')
+      .order('name')
+    if (pData) {
+      setProjects(pData.map((p) => ({ id: p.id, name: p.name, location: p.location || '' })))
+    }
+  }
+
   useEffect(() => {
     if (
       employees.length === 0
@@ -500,7 +521,7 @@ export default function SiteVisits({
         setError('')
 
         try {
-          await loadVisits()
+          await Promise.all([loadVisits(), loadProjects()])
         } catch (err) {
           if (!active) return
 

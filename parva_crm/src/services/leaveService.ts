@@ -8,6 +8,7 @@ import type {
     LeaveRequest,
     LeaveType,
     LeaveStatus,
+    Role,
 } from '../types'
 
 interface CreateLeaveRequestInput {

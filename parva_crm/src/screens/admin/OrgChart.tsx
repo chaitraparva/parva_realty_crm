@@ -48,6 +48,8 @@ const roleLabels: Record<Role, string> = {
 
 type OrgEmployee = Employee & {
   officeName?: string | null
+  employeeCode?: string | null
+  designation?: string | null
 }
 
 type DbEmployee = {
@@ -65,7 +67,10 @@ type DbEmployee = {
   offices?: {
     id: string
     name: string
-  } | null
+  } | {
+    id: string
+    name: string
+  }[] | null
 }
 
 function mapDbEmployee(row: DbEmployee): OrgEmployee {
@@ -76,7 +81,9 @@ function mapDbEmployee(row: DbEmployee): OrgEmployee {
       ? row.role
       : 'manager'
 
-  const officeName = row.offices?.name ?? null
+  const officeName = Array.isArray(row.offices)
+    ? row.offices[0]?.name ?? null
+    : row.offices?.name ?? null
 
   return {
     id: row.id,
@@ -108,6 +115,7 @@ function mapDbEmployee(row: DbEmployee): OrgEmployee {
     capacityLimit: 0,
     leadsAssigned: 0,
     conversions: 0,
+    baseSalary: 0,
     responseTime: '—',
   }
 }

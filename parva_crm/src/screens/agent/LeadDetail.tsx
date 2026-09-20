@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { ArrowLeft, Phone, Mail, MessageCircle, Building2, Clock, Plus, MapPin, IndianRupee, AlertTriangle, FileSignature, CheckCircle2, ExternalLink, XCircle, RotateCcw, ArrowRightCircle, Flag as FlagIcon, Plane, ClipboardCheck } from 'lucide-react'
 import { useData } from '../../contexts/DataContext'
+import { supabase } from '../../lib/supabase'
 import { leadsApi, approvalsApi, ApiError } from '../../services/api'
 import { StatusBadge, SourceBadge, LeadScoreBadge, WorkloadBadge } from '../../components/ui/Badge'
 import Modal from '../../components/ui/Modal'
@@ -74,6 +75,38 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
   const [approvalComment, setApprovalComment] = useState('')
   const [approvalSubmitted, setApprovalSubmitted] = useState(false)
   const [approvalSubmitting, setApprovalSubmitting] = useState(false)
+
+  const [projects, setProjects] = useState<{ id: string; name: string; location: string }[]>([])
+  const [units, setUnits] = useState<{ id: string; projectId: string; unitNumber: string; bhk: string; areaSqft: number; photos?: string[] }[]>([])
+
+  useEffect(() => {
+    let active = true
+    async function loadInventory() {
+      try {
+        const [pRes, uRes] = await Promise.all([
+          supabase.from('inventory_projects').select('id, name, location'),
+          supabase.from('inventory_units').select('id, project_id, unit_number, bhk, area_sqft')
+        ])
+        if (!active) return
+        if (pRes.data) {
+          setProjects(pRes.data.map((p) => ({ id: p.id, name: p.name, location: p.location || '' })))
+        }
+        if (uRes.data) {
+          setUnits(uRes.data.map((u) => ({
+            id: u.id,
+            projectId: u.project_id,
+            unitNumber: u.unit_number,
+            bhk: u.bhk || '',
+            areaSqft: u.area_sqft || 0,
+          })))
+        }
+      } catch (err) {
+        console.error('Failed to load inventory for LeadDetail', err)
+      }
+    }
+    loadInventory()
+    return () => { active = false }
+  }, [])
 
   const dubaiAgents = employees.filter((e) => e.office === 'Dubai' && e.role === 'agent' && e.status === 'active')
   const dubaiRanked = rankCandidates(dubaiAgents, { office: 'Dubai' })
@@ -357,7 +390,7 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {shortlisted.map((u) => {
-                  const project = projects.find((p) => p.id === u.projectId)!
+                  const project = projects.find((p) => p.id === u.projectId) || { name: 'Property', location: '' }
                   const photos = [...(u.photos || []), ...(unitPhotos[u.id] || [])]
                   return (
                     <div key={u.id} className="rounded-xl border border-border overflow-hidden">
@@ -669,7 +702,7 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
           <div className="p-3 rounded-lg bg-muted text-sm text-muted-foreground">
             Booking agreement for <span className="font-semibold text-foreground">{lead.name}</span>
             {shortlisted[0] && (
-              <> — {projects.find((p) => p.id === shortlisted[0].projectId)?.name}, Unit {shortlisted[0].unitNumber}</>
+              <> — {projects.find((p) => p.id === shortlisted[0].projectId)?.name || 'Property'}, Unit {shortlisted[0].unitNumber}</>
             )}
           </div>
           <SignaturePad

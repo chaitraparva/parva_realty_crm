@@ -63,9 +63,29 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
   const [assignLeadId, setAssignLeadId] = useState<string | null>(null)
   const [assignTo, setAssignTo] = useState('')
   const [assigning, setAssigning] = useState(false)
+  const [scheduledVisitCount, setScheduledVisitCount] = useState(0)
 
   useEffect(() => { setPage(1) }, [search, sourceFilter, statusFilter, officeFilter, assigneeFilter])
   useEffect(() => { if (selected.size === 0) setSelectionMode(false) }, [selected])
+
+  useEffect(() => {
+    let active = true
+    async function loadScheduledVisits() {
+      try {
+        const { count, error } = await supabase
+          .from('site_visits')
+          .select('id', { count: 'exact', head: true })
+          .eq('status', 'Scheduled')
+        if (active && !error && count !== null) {
+          setScheduledVisitCount(count)
+        }
+      } catch (e) {
+        console.error('Failed to load scheduled visits count', e)
+      }
+    }
+    loadScheduledVisits()
+    return () => { active = false }
+  }, [])
 
   /*
    * ============================================================
@@ -524,7 +544,7 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
   const stats = {
     total: agentLeads.length,
     new: agentLeads.filter((l) => l.status === FIRST_STAGE).length,
-    siteVisit: siteVisits.filter((v) => v.status === 'Scheduled').length,
+    siteVisit: scheduledVisitCount,
     closed: agentLeads.filter((l) => l.status === FINAL_STAGE).length,
   }
 

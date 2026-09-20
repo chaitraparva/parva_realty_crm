@@ -7,6 +7,7 @@ const typeIcons: Record<Notification['type'], React.ReactNode> = {
   'unassigned-lead': <Bell size={16} />,
   'pending-payroll': <CreditCard size={16} />,
   'leave-request': <UserCheck size={16} />,
+  'leave_request': <UserCheck size={16} />,
   flag: <AlertTriangle size={16} />,
   'lead-cancelled': <XCircle size={16} />,
   'site-visit': <Building2 size={16} />,
@@ -21,6 +22,7 @@ const typeColors: Record<Notification['type'], { bg: string; color: string }> = 
   'unassigned-lead': { bg: '#F0FDFA', color: '#0F766E' },
   'pending-payroll': { bg: '#F3F4F6', color: '#6B7280' },
   'leave-request': { bg: '#F5F3FF', color: '#7C3AED' },
+  'leave_request': { bg: '#F5F3FF', color: '#7C3AED' },
   flag: { bg: '#FEF2F2', color: '#DC2626' },
   'lead-cancelled': { bg: '#FEF2F2', color: '#DC2626' },
   'site-visit': { bg: '#FFF7ED', color: '#EA580C' },
@@ -30,7 +32,7 @@ const typeColors: Record<Notification['type'], { bg: string; color: string }> = 
   approval: { bg: '#EEF2FF', color: '#4F46E5' },
 }
 
-const priorityBadge: Record<Notification['priority'], string> = {
+const priorityBadge: Record<NonNullable<Notification['priority']>, string> = {
   high: 'bg-red-50 text-red-600',
   medium: 'bg-amber-50 text-amber-600',
   low: 'bg-teal-50 text-teal-600',
@@ -85,7 +87,7 @@ export default function Notifications({ notifs, onMarkRead, onMarkAllRead }: Not
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-1">
                     <p className="text-sm font-semibold text-foreground">{notif.title}</p>
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${priorityBadge[notif.priority]}`}>{notif.priority}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${priorityBadge[notif.priority || 'low']}`}>{notif.priority || 'low'}</span>
                     {!notif.read && <span className="w-2 h-2 rounded-full bg-accent ml-auto shrink-0" />}
                   </div>
                   <p className="text-sm text-muted-foreground leading-relaxed">{notif.message}</p>

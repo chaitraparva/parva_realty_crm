@@ -357,6 +357,7 @@ export default function Messages({
   currentUserId,
   initialContactId,
   initialGroupId,
+  groupList = [],
   callLogsList = [],
   setCallLogsList = () => { },
   emailsList = [],

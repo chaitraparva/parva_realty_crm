@@ -572,7 +572,7 @@ export default function Inventory({ role = 'agent', unitPhotos, setUnitPhotos }:
           {dbProjects.map((p) => {
             const projectUnits = dbUnits.filter((u) => u.projectId === p.id)
             const available = projectUnits.filter((u) => u.status === 'Available').length
-            const Rera = reraConfig[p.reraStatus] || reraConfig.Registered; const RIcon = Rera.icon
+            const Rera = reraConfig[p.reraStatus as keyof typeof reraConfig] || reraConfig.Registered; const RIcon = Rera.icon
             return (
               <div key={p.id} className="text-left bg-card rounded-xl border shadow-sm p-4 transition-all" style={{ borderColor: projectFilter === p.id ? '#C9A96E' : undefined, borderWidth: projectFilter === p.id ? 2 : 1 }}>
                 <button
@@ -716,7 +716,7 @@ export default function Inventory({ role = 'agent', unitPhotos, setUnitPhotos }:
                     <p className="text-sm font-semibold text-foreground">{viewProject.name}</p>
                     <p className="text-xs text-muted-foreground">{viewProject.developer}</p>
                   </div>
-                  <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${(reraConfig[viewProject.reraStatus] || reraConfig.Registered).cls}`}>{viewProject.reraStatus}</span>
+                  <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${(reraConfig[viewProject.reraStatus as keyof typeof reraConfig] || reraConfig.Registered).cls}`}>{viewProject.reraStatus}</span>
                 </div>
                 {viewProject.priceAED && (
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-border">
