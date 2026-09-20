@@ -1,5 +1,9 @@
 import { supabase } from '../lib/supabase'
 import { getCurrentEmployee } from './chatService'
+import {
+    sendLeaveRequestNotification,
+    sendLeaveReviewNotification,
+} from './notificationService'
 import type {
     LeaveRequest,
     LeaveType,
@@ -63,13 +67,14 @@ function mapLeaveRow(
 /**
  * Load leave requests visible to the currently authenticated employee.
  *
- * RLS determines the actual scope:
- * - Agent → own requests
- * - Manager → own + team requests
- * - Admin → all requests
+ * Scoping:
+ * - Admin → all requests across the organization
+ * - Manager / Agent → own requests only
  */
-export async function getLeaveRequests(): Promise<LeaveRequest[]> {
-    const { data, error } = await supabase
+export async function getLeaveRequests(role?: Role): Promise<LeaveRequest[]> {
+    const employee = await getCurrentEmployee()
+
+    let query = supabase
         .from('leave_requests')
         .select(`
       id,
@@ -90,6 +95,12 @@ export async function getLeaveRequests(): Promise<LeaveRequest[]> {
             ascending: false,
         })
 
+    // Non-admin employees (Managers and Agents) can only view their own leave requests
+    if (role !== 'admin' && employee.role !== 'admin') {
+        query = query.eq('employee_id', employee.id)
+    }
+
+    const { data, error } = await query
     throwIfError(error)
 
     return ((data ?? []) as Array<
@@ -197,17 +208,31 @@ export async function createLeaveRequest(
         throw new Error('Leave request was not created')
     }
 
-    return mapLeaveRow(
+    const created = mapLeaveRow(
         data as LeaveRow,
         employee.name
     )
+
+    // Trigger notification to Super Admin (Chaitra)
+    try {
+        void sendLeaveRequestNotification({
+            employeeName: employee.name,
+            startDate: created.startDate,
+            endDate: created.endDate,
+            requestId: created.id,
+        })
+    } catch (notifErr) {
+        console.error('Failed to trigger leave request notification:', notifErr)
+    }
+
+    return created
 }
 
 /**
- * Manager/Admin approves or rejects a leave request.
+ * Super Admin approves or rejects a leave request.
  *
- * RLS checks that the authenticated user has permission
- * to update this request.
+ * Strictly enforced: Only Super Admin ('admin') can approve or reject.
+ * Employees/Managers cannot review or approve requests.
  */
 export async function reviewLeaveRequest(
     requestId: string,
@@ -216,17 +241,22 @@ export async function reviewLeaveRequest(
 ): Promise<LeaveRequest> {
     const employee = await getCurrentEmployee()
 
+    // Strictly enforce role check: only Super Admin can approve/reject
+    if (employee.role !== 'admin') {
+        throw new Error('Permission denied: Only Super Admin can approve or reject leave requests.')
+    }
+
     // Employees cannot review their own leave request
     const { data: existing, error: checkError } = await supabase
         .from('leave_requests')
-        .select('id, employee_id, status')
+        .select('id, employee_id, status, start_date, end_date')
         .eq('id', requestId)
         .single()
 
     throwIfError(checkError)
 
     if (existing && existing.employee_id === employee.id) {
-        throw new Error('You cannot approve or reject your own leave request.')
+        throw new Error('Permission denied: You cannot approve or reject your own leave request.')
     }
 
     const { data, error } = await supabase
@@ -269,10 +299,25 @@ export async function reviewLeaveRequest(
         employee?: { name?: string } | null
     }
 
-    return mapLeaveRow(
+    const reviewed = mapLeaveRow(
         row,
         row.employee?.name
     )
+
+    // Trigger notification to employee
+    try {
+        void sendLeaveReviewNotification({
+            recipientEmployeeId: reviewed.employeeId,
+            status: decision,
+            startDate: reviewed.startDate,
+            endDate: reviewed.endDate,
+            reviewerComment: reviewerComment.trim() || undefined,
+        })
+    } catch (notifErr) {
+        console.error('Failed to trigger leave review notification:', notifErr)
+    }
+
+    return reviewed
 }
 
 /**
@@ -282,7 +327,7 @@ export async function reviewLeaveRequest(
 export async function cancelLeaveRequest(
     requestId: string
 ): Promise<LeaveRequest> {
-    await getCurrentEmployee()
+    const employee = await getCurrentEmployee()
 
     const { data, error } = await supabase
         .from('leave_requests')
@@ -291,6 +336,7 @@ export async function cancelLeaveRequest(
             updated_at: new Date().toISOString(),
         })
         .eq('id', requestId)
+        .eq('employee_id', employee.id)
         .eq('status', 'Pending')
         .select(`
       id,

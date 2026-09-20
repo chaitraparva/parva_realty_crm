@@ -309,6 +309,7 @@ export interface Notification {
   | 'unassigned-lead'
   | 'pending-payroll'
   | 'leave-request'
+  | 'leave_request'
   | 'flag'
   | 'lead-cancelled'
   | 'site-visit'
@@ -320,8 +321,10 @@ export interface Notification {
   message: string
   timestamp: string
   read: boolean
-  priority: 'high' | 'medium' | 'low'
+  priority?: 'high' | 'medium' | 'low'
   forUserId?: string
+  recipientId?: string
+  link?: string
 }
 
 export interface AuditEntry {

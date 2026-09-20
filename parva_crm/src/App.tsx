@@ -28,6 +28,11 @@ import type {
 import { supabase } from './lib/supabase'
 import { getCurrentEmployee } from './services/chatService'
 import {
+  fetchUserNotifications,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
+} from './services/notificationService'
+import {
   DataProvider,
   useData,
 } from './contexts/DataContext'
@@ -67,6 +72,7 @@ import Approvals from './screens/Approvals'
 import Notifications from './screens/Notifications'
 import Settings from './screens/Settings'
 import LeaveManagement from './screens/LeaveManagement'
+import { AlertCircle } from 'lucide-react'
 
 const defaultScreens: Record<
   Role,
@@ -75,6 +81,31 @@ const defaultScreens: Record<
   agent: 'my-leads',
   manager: 'team-overview',
   admin: 'admin-dashboard',
+}
+
+const ADMIN_ONLY_SCREENS = new Set([
+  'admin-dashboard',
+  'payroll-admin',
+  'flags-admin',
+  'reports',
+  'audit-log',
+  'escalations',
+])
+
+const MANAGER_ONLY_SCREENS = new Set([
+  'team-overview',
+  'pipeline',
+  'source-performance',
+  'flags',
+  'payroll-manager',
+  'workload',
+])
+
+export function isScreenPermittedForRole(targetScreen: string, userRole: Role): boolean {
+  if (userRole === 'admin') return true
+  if (ADMIN_ONLY_SCREENS.has(targetScreen)) return false
+  if (userRole === 'agent' && MANAGER_ONLY_SCREENS.has(targetScreen)) return false
+  return true
 }
 
 export interface LoggedInUser {
@@ -160,12 +191,12 @@ function AuthenticatedApp({
   const getInitialScreen = (): string => {
     if (typeof window !== 'undefined') {
       const hashScreen = window.location.hash.replace(/^#\/?/, '').trim()
-      if (hashScreen) {
+      if (hashScreen && isScreenPermittedForRole(hashScreen, currentUser.role)) {
         return hashScreen
       }
       try {
         const savedScreen = localStorage.getItem('parva_crm_active_screen')
-        if (savedScreen) {
+        if (savedScreen && isScreenPermittedForRole(savedScreen, currentUser.role)) {
           return savedScreen
         }
       } catch {
@@ -334,14 +365,17 @@ function AuthenticatedApp({
     nextScreen: string,
     nextParams?: Record<string, string>
   ) => {
-    setScreen(nextScreen)
+    const targetScreen = isScreenPermittedForRole(nextScreen, role)
+      ? nextScreen
+      : defaultScreens[role]
+    setScreen(targetScreen)
     setParams(nextParams || {})
     if (typeof window !== 'undefined') {
       try {
-        if (window.location.hash.replace(/^#\/?/, '').trim() !== nextScreen) {
-          window.location.hash = nextScreen
+        if (window.location.hash.replace(/^#\/?/, '').trim() !== targetScreen) {
+          window.location.hash = targetScreen
         }
-        localStorage.setItem('parva_crm_active_screen', nextScreen)
+        localStorage.setItem('parva_crm_active_screen', targetScreen)
       } catch {
         // ignore storage/hash errors
       }
@@ -365,12 +399,16 @@ function AuthenticatedApp({
     const handleHashChange = () => {
       const hashScreen = window.location.hash.replace(/^#\/?/, '').trim()
       if (hashScreen && hashScreen !== screen) {
-        setScreen(hashScreen)
+        if (isScreenPermittedForRole(hashScreen, currentUser.role)) {
+          setScreen(hashScreen)
+        } else {
+          navigate(defaultScreens[currentUser.role])
+        }
       }
     }
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
-  }, [screen])
+  }, [screen, currentUser.role])
 
   /*
    * ============================================================
@@ -381,98 +419,61 @@ function AuthenticatedApp({
   useEffect(() => {
     let active = true
 
-    const loadNotifications =
-      async () => {
-        const {
-          data,
-          error,
-        } = await supabase
-          .from(
-            'notifications'
-          )
-          .select(`
-            id,
-            employee_id,
-            type,
-            title,
-            message,
-            is_read,
-            link,
-            created_at
-          `)
-          .eq(
-            'employee_id',
-            currentUser.id
-          )
-          .order(
-            'created_at',
-            {
-              ascending:
-                false,
-            }
-          )
-
-        if (!active) {
-          return
-        }
-
-        if (error) {
-          console.error(
-            'Failed to load notifications:',
-            error.message
-          )
-
-          setNotifs([])
-          return
-        }
-
-        const mapped: Notification[] =
-          (
-            data ?? []
-          ).map(
-            (
-              notification: any
-            ) => ({
-              id:
-                notification.id,
-
-              recipientId:
-                notification.employee_id,
-
-              type:
-                notification.type,
-
-              title:
-                notification.title,
-
-              message:
-                notification.message,
-
-              timestamp:
-                notification.created_at,
-
-              read:
-                notification.is_read,
-
-              link:
-                notification.link ??
-                undefined,
-            })
-          )
-
-        setNotifs(
-          mapped
-        )
+    const loadNotifications = async () => {
+      try {
+        const mapped = await fetchUserNotifications(currentUser.id)
+        if (!active) return
+        setNotifs(mapped)
+      } catch (err) {
+        console.error('Failed to load notifications:', err)
       }
+    }
 
     void loadNotifications()
 
+    // Real-time synchronization with Supabase notifications table
+    const channel = supabase
+      .channel(`notifications_realtime_${currentUser.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `employee_id=eq.${currentUser.id}`,
+        },
+        () => {
+          if (active) {
+            void loadNotifications()
+          }
+        }
+      )
+      .subscribe()
+
     return () => {
       active = false
+      void supabase.removeChannel(channel)
     }
-  }, [
-    currentUser.id,
-  ])
+  }, [currentUser.id])
+
+  const handleMarkRead = (id: string) => {
+    setNotifs((prev) =>
+      prev.map((notification) =>
+        notification.id === id ? { ...notification, read: true } : notification
+      )
+    )
+    void markNotificationAsRead(id, currentUser.id)
+  }
+
+  const handleMarkAllRead = () => {
+    setNotifs((prev) =>
+      prev.map((notification) => ({
+        ...notification,
+        read: true,
+      }))
+    )
+    void markAllNotificationsAsRead(currentUser.id)
+  }
 
   /*
    * ============================================================
@@ -804,6 +805,29 @@ function AuthenticatedApp({
 
   const renderScreen =
     () => {
+      if (!isScreenPermittedForRole(screen, role)) {
+        return (
+          <div className="bg-card rounded-xl border border-border p-8 text-center max-w-md mx-auto my-12 shadow-sm">
+            <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto mb-4">
+              <AlertCircle size={24} />
+            </div>
+            <h3 className="font-serif text-lg font-semibold text-foreground">
+              Access Denied
+            </h3>
+            <p className="text-sm text-muted-foreground mt-2">
+              Your account role does not have permission to access this screen.
+            </p>
+            <button
+              onClick={() => navigate(defaultScreens[role])}
+              className="mt-6 px-4 py-2 rounded-lg text-sm font-semibold transition-opacity hover:opacity-95"
+              style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5' }}
+            >
+              Return to Dashboard
+            </button>
+          </div>
+        )
+      }
+
       switch (
       screen
       ) {
@@ -1135,66 +1159,12 @@ function AuthenticatedApp({
               notifs={
                 notifs
               }
-
-              onMarkRead={(
-                id
-              ) => {
-                setNotifs(
-                  (prev) =>
-                    prev.map(
-                      (notification) =>
-                        notification.id ===
-                          id
-                          ? {
-                            ...notification,
-                            read: true,
-                          }
-                          : notification
-                    )
-                )
-
-                void supabase
-                  .from(
-                    'notifications'
-                  )
-                  .update({
-                    is_read:
-                      true,
-                  })
-                  .eq(
-                    'id',
-                    id
-                  )
-                  .eq(
-                    'employee_id',
-                    currentUser.id
-                  )
-              }}
-
-              onMarkAllRead={() => {
-                setNotifs(
-                  (prev) =>
-                    prev.map(
-                      (notification) => ({
-                        ...notification,
-                        read: true,
-                      })
-                    )
-                )
-
-                void supabase
-                  .from(
-                    'notifications'
-                  )
-                  .update({
-                    is_read:
-                      true,
-                  })
-                  .eq(
-                    'employee_id',
-                    currentUser.id
-                  )
-              }}
+              onMarkRead={
+                handleMarkRead
+              }
+              onMarkAllRead={
+                handleMarkAllRead
+              }
             />
           )
 
@@ -1283,6 +1253,15 @@ function AuthenticatedApp({
         }
         unreadMessages={
           unreadMessages
+        }
+        notifications={
+          notifs
+        }
+        onMarkRead={
+          handleMarkRead
+        }
+        onMarkAllRead={
+          handleMarkAllRead
         }
         darkMode={
           darkMode

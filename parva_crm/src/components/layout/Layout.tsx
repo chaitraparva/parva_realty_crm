@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { Role, Group } from '../../types'
+import type { Role, Group, Notification } from '../../types'
 import Sidebar from './Sidebar'
 import TopBar from './TopBar'
 import ProfileModal from './ProfileModal'
@@ -35,6 +35,9 @@ interface LayoutProps {
   onLogout: () => void
   unreadCount?: number
   unreadMessages?: number
+  notifications?: Notification[]
+  onMarkRead?: (id: string) => void
+  onMarkAllRead?: () => void
   darkMode?: boolean
   onToggleDarkMode?: () => void
   groupList?: Group[]
@@ -44,7 +47,24 @@ interface LayoutProps {
   children: ReactNode
 }
 
-export default function Layout({ role, screen, onNavigate, onLogout, unreadCount = 0, unreadMessages = 0, darkMode = false, onToggleDarkMode, groupList = [], pendingEscalations = 0, currentUserName = '', currentUserEmail = '', children }: LayoutProps) {
+export default function Layout({
+  role,
+  screen,
+  onNavigate,
+  onLogout,
+  unreadCount = 0,
+  unreadMessages = 0,
+  notifications = [],
+  onMarkRead,
+  onMarkAllRead,
+  darkMode = false,
+  onToggleDarkMode,
+  groupList = [],
+  pendingEscalations = 0,
+  currentUserName = '',
+  currentUserEmail = '',
+  children,
+}: LayoutProps) {
   const [profileOpen, setProfileOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -86,6 +106,9 @@ export default function Layout({ role, screen, onNavigate, onLogout, unreadCount
         role={role}
         screen={screen}
         unreadCount={unreadCount}
+        notifications={notifications}
+        onMarkRead={onMarkRead}
+        onMarkAllRead={onMarkAllRead}
         onNavigate={onNavigate}
         onOpenProfile={() => setProfileOpen(true)}
         onMenuClick={() => setMobileNavOpen(true)}

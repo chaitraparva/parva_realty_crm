@@ -127,7 +127,7 @@ export default function LeaveManagement({
         setError('')
 
         try {
-            const data = await getLeaveRequests()
+            const data = await getLeaveRequests(role)
             setRequests(data)
         } catch (err) {
             setError(
@@ -160,7 +160,9 @@ export default function LeaveManagement({
         return () => {
             void supabase.removeChannel(channel)
         }
-    }, [])
+    }, [role])
+
+    const isAdmin = role === 'admin'
 
     const employeeRequests = useMemo(() => {
         return requests.filter((request) => request.employeeId === currentUserId)
@@ -171,7 +173,7 @@ export default function LeaveManagement({
     }, [requests])
 
     const displayedRequests = useMemo(() => {
-        if (role === 'agent') {
+        if (!isAdmin) {
             return employeeRequests
         }
         if (activeTab === 'pending') {
@@ -181,7 +183,7 @@ export default function LeaveManagement({
             return employeeRequests
         }
         return requests
-    }, [role, activeTab, employeeRequests, pendingRequests, requests])
+    }, [isAdmin, activeTab, employeeRequests, pendingRequests, requests])
 
     const pendingCount = pendingRequests.length
 
@@ -347,11 +349,9 @@ export default function LeaveManagement({
                         Leave Management
                     </h2>
                     <p className="text-xs text-muted-foreground mt-1">
-                        {role === 'agent'
-                            ? 'Apply for leave and track your requests in real time'
-                            : role === 'manager'
-                                ? 'Review and approve team leave requests'
-                                : 'Manage and approve leave requests across the organisation'}
+                        {isAdmin
+                            ? 'Manage and approve leave requests across the organisation'
+                            : 'Apply for leave and track your requests in real time'}
                     </p>
                 </div>
 
@@ -389,8 +389,8 @@ export default function LeaveManagement({
                 </div>
             )}
 
-            {/* Manager/Admin navigation tabs */}
-            {role !== 'agent' && (
+            {/* Super Admin navigation tabs */}
+            {isAdmin && (
                 <div className="bg-card rounded-xl border border-border shadow-sm p-1.5 flex gap-1">
                     <button
                         onClick={() => setActiveTab('pending')}
@@ -414,7 +414,7 @@ export default function LeaveManagement({
                                 : 'text-muted-foreground hover:text-foreground'
                             }`}
                     >
-                        All Team Requests
+                        All Leave Requests
                     </button>
 
                     <button
@@ -451,7 +451,7 @@ export default function LeaveManagement({
                                 Total Requests
                             </p>
                             <p className="text-2xl font-bold text-foreground mt-0.5">
-                                {role === 'agent'
+                                {!isAdmin
                                     ? employeeRequests.length
                                     : requests.length}
                             </p>
@@ -474,7 +474,7 @@ export default function LeaveManagement({
                                 Pending
                             </p>
                             <p className="text-2xl font-bold text-foreground mt-0.5">
-                                {role === 'agent'
+                                {!isAdmin
                                     ? employeeRequests.filter(
                                         (request) => request.status === 'Pending'
                                     ).length
@@ -499,7 +499,7 @@ export default function LeaveManagement({
                                 Approved
                             </p>
                             <p className="text-2xl font-bold text-foreground mt-0.5">
-                                {role === 'agent'
+                                {!isAdmin
                                     ? employeeRequests.filter(
                                         (request) => request.status === 'Approved'
                                     ).length
@@ -517,13 +517,13 @@ export default function LeaveManagement({
                 <div className="px-5 py-4 border-b border-border flex items-center justify-between">
                     <div>
                         <h3 className="font-serif text-base font-semibold text-foreground">
-                            {role === 'agent'
+                            {!isAdmin
                                 ? 'My Leave Requests'
                                 : activeTab === 'pending'
                                     ? 'Pending Approvals'
                                     : activeTab === 'mine'
                                         ? 'My Leave Requests'
-                                        : 'All Team Leave Requests'}
+                                        : 'All Leave Requests'}
                         </h3>
                         <p className="text-xs text-muted-foreground mt-0.5">
                             {displayedRequests.length} request
@@ -564,7 +564,7 @@ export default function LeaveManagement({
                             No leave requests found
                         </p>
                         <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
-                            {role === 'agent' || activeTab === 'mine'
+                            {!isAdmin || activeTab === 'mine'
                                 ? 'You have not submitted any leave requests yet. Click "+ Apply for Leave" to create one.'
                                 : activeTab === 'pending'
                                     ? 'No pending leave requests require review at this time.'
@@ -587,7 +587,7 @@ export default function LeaveManagement({
                                 isOwnRequest && request.status === 'Pending'
 
                             const canReview =
-                                role !== 'agent' &&
+                                isAdmin &&
                                 request.status === 'Pending' &&
                                 !isOwnRequest
 
@@ -623,7 +623,7 @@ export default function LeaveManagement({
                                                         {status.label}
                                                     </span>
 
-                                                    {isOwnRequest && role !== 'agent' && (
+                                                    {isOwnRequest && isAdmin && (
                                                         <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
                                                             Your request
                                                         </span>
