@@ -173,17 +173,6 @@ function AuthenticatedApp({
     darkMode,
     setDarkMode,
   ] = useState(false)
-
-  /*
-   * ============================================================
-   * NOTIFICATIONS
-   * ============================================================
-   */
-
-  const [
-    notifs,
-    setNotifs,
-  ] = useState<Notification[]>([])
   /*
   * ============================================================
   * LOAD EMPLOYEE SETTINGS
@@ -230,6 +219,99 @@ function AuthenticatedApp({
       active = false
     }
   }, [currentUser.id])
+
+  /*
+   * ============================================================
+   * NOTIFICATIONS + OTHER APP STATE
+   * ============================================================
+   */
+
+  const [
+    notifs,
+    setNotifs,
+  ] = useState<Notification[]>([])
+
+  const [
+    groupList,
+    setGroupList,
+  ] = useState<Group[]>(
+    initialGroups
+  )
+
+  const [
+    auditLog,
+    setAuditLog,
+  ] = useState<AuditEntry[]>(
+    initialAuditLog
+  )
+
+  const [
+    flagList,
+    setFlagList,
+  ] = useState<Flag[]>(
+    initialFlags
+  )
+
+  const [
+    visitList,
+    setVisitList,
+  ] = useState<SiteVisit[]>(
+    initialSiteVisits
+  )
+
+  const [
+    unitPhotos,
+    setUnitPhotos,
+  ] = useState<Record<string, string[]>>({})
+
+  const [
+    escalations,
+    setEscalations,
+  ] = useState<EscalationRequest[]>(
+    initialEscalations
+  )
+
+  const [
+    msgList,
+    setMsgList,
+  ] = useState<Message[]>(
+    initialMessages
+  )
+
+  const [
+    callLogsList,
+    setCallLogsList,
+  ] = useState<CallLog[]>(
+    initialCallLogs
+  )
+
+  const [
+    emailsList,
+    setEmailsList,
+  ] = useState<InternalEmail[]>(
+    initialEmails
+  )
+
+  const [
+    groupMsgsList,
+    setGroupMsgsList,
+  ] = useState<GroupMessage[]>(
+    initialGroupMessages
+  )
+
+  /*
+   * ============================================================
+   * NAVIGATION
+   * ============================================================
+   */
+
+  const navigate = (
+    nextScreen: string,
+    nextParams?: Record<string, string>
+  ) => {
+    setScreen(nextScreen)
+    setParams(nextParams || {})
+  }
 
   /*
    * ============================================================
