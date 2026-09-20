@@ -4,6 +4,8 @@ import { siteVisits } from '../../data/mockData'
 import { useData, mapLead } from '../../contexts/DataContext'
 import { leadsApi, ApiError } from '../../services/api'
 import { getCurrentEmployeeSettings } from '../../services/employeeSettings'
+import { getMissedFollowUpNotifications } from '../../services/notificationAutomation'
+import { supabase } from '../../lib/supabase'
 import { StatusBadge, LeadScoreBadge } from '../../components/ui/Badge'
 import KPICard from '../../components/ui/KPICard'
 import Modal from '../../components/ui/Modal'
@@ -65,6 +67,89 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
 
   useEffect(() => { setPage(1) }, [search, sourceFilter, statusFilter, officeFilter, assigneeFilter])
   useEffect(() => { if (selected.size === 0) setSelectionMode(false) }, [selected])
+
+  /*
+   * ============================================================
+   * MISSED FOLLOW-UP NOTIFICATIONS
+   * ============================================================
+   *
+   * Uses the employee's saved notification preference and
+   * inactivity threshold. Existing notifications are checked
+   * first so refreshes do not create duplicates.
+   */
+  useEffect(() => {
+    if (!currentUserId || !onAddNotification || agentLeads.length === 0) {
+      return
+    }
+
+    let active = true
+
+    const checkMissedFollowUps = async () => {
+      try {
+        const settings = await getCurrentEmployeeSettings()
+
+        if (!settings.notifMissedFollowup) {
+          return
+        }
+
+        const candidates = getMissedFollowUpNotifications(
+          agentLeads,
+          currentUserId,
+          settings
+        )
+
+        if (candidates.length === 0) {
+          return
+        }
+
+        const { data, error } = await supabase
+          .from('notifications')
+          .select('link')
+          .eq('employee_id', currentUserId)
+          .eq('type', 'missed-followup')
+
+        if (error) {
+          throw error
+        }
+
+        if (!active) {
+          return
+        }
+
+        const existingLinks = new Set(
+          (data ?? [])
+            .map((notification) => notification.link)
+            .filter(
+              (link): link is string =>
+                typeof link === 'string' && link.length > 0
+            )
+        )
+
+        for (const notification of candidates) {
+          if (notification.link && existingLinks.has(notification.link)) {
+            continue
+          }
+
+          onAddNotification(notification)
+
+          if (notification.link) {
+            existingLinks.add(notification.link)
+          }
+        }
+      } catch (err) {
+        console.error(
+          'Failed to check missed follow-up alerts:',
+          err
+        )
+      }
+    }
+
+    void checkMissedFollowUps()
+
+    return () => {
+      active = false
+    }
+  }, [agentLeads, currentUserId])
 
   const submitNewLead = async () => {
     if (!newLeadForm.name.trim() || !newLeadForm.phone.trim()) return
