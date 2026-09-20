@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bell, AlertTriangle, Clock, CreditCard, UserCheck, XCircle, Building2, Plane, AlertCircle, Zap, ClipboardCheck } from 'lucide-react'
+import { Bell, AlertTriangle, Clock, CreditCard, UserCheck, XCircle, Building2, Plane, AlertCircle, Zap, ClipboardCheck, MessageCircle } from 'lucide-react'
 import type { Notification } from '../types'
 
 const typeIcons: Record<Notification['type'], React.ReactNode> = {
@@ -15,6 +15,8 @@ const typeIcons: Record<Notification['type'], React.ReactNode> = {
   escalation: <AlertCircle size={16} />,
   'ai-assignment': <Zap size={16} />,
   approval: <ClipboardCheck size={16} />,
+  'chat_message': <MessageCircle size={16} />,
+  'message': <MessageCircle size={16} />,
 }
 
 const typeColors: Record<Notification['type'], { bg: string; color: string }> = {
@@ -30,6 +32,8 @@ const typeColors: Record<Notification['type'], { bg: string; color: string }> = 
   escalation: { bg: '#FEF3C7', color: '#D97706' },
   'ai-assignment': { bg: '#F0FDF4', color: '#16A34A' },
   approval: { bg: '#EEF2FF', color: '#4F46E5' },
+  'chat_message': { bg: 'rgba(201,169,110,0.15)', color: '#C9A96E' },
+  'message': { bg: 'rgba(201,169,110,0.15)', color: '#C9A96E' },
 }
 
 const priorityBadge: Record<NonNullable<Notification['priority']>, string> = {

@@ -17,6 +17,7 @@ import {
   Plane,
   AlertCircle,
   Zap,
+  MessageCircle,
 } from 'lucide-react'
 import type { Role, Notification } from '../../types'
 
@@ -68,6 +69,9 @@ function getNotificationIcon(type: Notification['type']) {
       return <AlertCircle size={16} className="text-orange-600" />
     case 'ai-assignment':
       return <Zap size={16} className="text-purple-600" />
+    case 'chat_message':
+    case 'message':
+      return <MessageCircle size={16} className="text-[#C9A96E]" />
     case 'unassigned-lead':
     default:
       return <Bell size={16} className="text-[#C9A96E]" />
@@ -109,7 +113,7 @@ interface TopBarProps {
   notifications?: Notification[]
   onMarkRead?: (id: string) => void
   onMarkAllRead?: () => void
-  onNavigate: (screen: string) => void
+  onNavigate: (screen: string, params?: Record<string, string>) => void
   onOpenProfile?: () => void
   onMenuClick?: () => void
   onSearchClick?: () => void
@@ -195,6 +199,13 @@ export default function TopBar({
       if (notif.link.startsWith('lead-detail:')) {
         const leadId = notif.link.replace('lead-detail:', '').trim()
         onNavigate('lead-detail')
+      } else if (notif.link.startsWith('messages?')) {
+        const queryStr = notif.link.split('?')[1] || ''
+        const params: Record<string, string> = {}
+        new URLSearchParams(queryStr).forEach((val, key) => {
+          params[key] = val
+        })
+        onNavigate('messages', params)
       } else {
         onNavigate(notif.link)
       }

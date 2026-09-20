@@ -317,6 +317,8 @@ export interface Notification {
   | 'escalation'
   | 'ai-assignment'
   | 'approval'
+  | 'chat_message'
+  | 'message'
   title: string
   message: string
   timestamp: string

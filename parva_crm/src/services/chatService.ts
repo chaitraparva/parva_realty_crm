@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase'
+import { sendChatMessageNotifications } from './notificationService'
 
 export interface ChatMessageRow {
   id: string
@@ -22,6 +23,7 @@ export interface ChatMemberRow {
   conversation_id: string
   employee_id: string
   joined_at: string
+  last_read_at?: string
 }
 
 export interface ChatGroup {
@@ -318,7 +320,7 @@ export async function getConversationMessages(conversationId: string): Promise<C
 export async function loadChatState(employeeId: string): Promise<ChatState> {
   const { data: myMemberships, error: membershipError } = await supabase
     .from('conversation_members')
-    .select('conversation_id, employee_id, joined_at')
+    .select('conversation_id, employee_id, joined_at, last_read_at')
     .eq('employee_id', employeeId)
 
   throwIfError(membershipError)
@@ -339,7 +341,7 @@ export async function loadChatState(employeeId: string): Promise<ChatState> {
       .in('id', conversationIds),
     supabase
       .from('conversation_members')
-      .select('conversation_id, employee_id, joined_at')
+      .select('conversation_id, employee_id, joined_at, last_read_at')
       .in('conversation_id', conversationIds),
     supabase
       .from('messages')
@@ -372,14 +374,15 @@ export async function loadChatState(employeeId: string): Promise<ChatState> {
 }
 
 /**
- * Inserts a new message row into public.messages.
+ * Inserts a new message row into public.messages and notifies recipient members.
  */
 export async function sendMessage(
   conversationId: string,
   senderId: string,
   body: string,
   attachmentName?: string,
-  attachmentUrl?: string
+  attachmentUrl?: string,
+  senderName?: string
 ): Promise<ChatMessageRow> {
   const { data, error } = await supabase
     .from('messages')
@@ -395,7 +398,126 @@ export async function sendMessage(
 
   throwIfError(error)
   if (!data) throw new Error('Message was not saved')
+
+  // Keep sender's own conversation read state up to date
+  void markConversationAsRead(conversationId, senderId).catch(() => {})
+
+  // Dispatch incoming chat notifications to other members asynchronously
+  void (async () => {
+    try {
+      const [{ data: convo }, { data: members }] = await Promise.all([
+        supabase.from('conversations').select('type, name').eq('id', conversationId).maybeSingle(),
+        supabase.from('conversation_members').select('employee_id').eq('conversation_id', conversationId),
+      ])
+
+      const recipientIds = (members ?? [])
+        .map((m) => m.employee_id)
+        .filter((id) => id && id !== senderId)
+
+      if (recipientIds.length === 0) return
+
+      let resolvedName = senderName
+      if (!resolvedName) {
+        const { data: senderEmp } = await supabase
+          .from('employees')
+          .select('name')
+          .eq('id', senderId)
+          .maybeSingle()
+        resolvedName = senderEmp?.name || 'Someone'
+      }
+
+      await sendChatMessageNotifications({
+        senderId,
+        senderName: resolvedName || 'Someone',
+        conversationId,
+        conversationType: convo?.type || 'direct',
+        groupName: convo?.name,
+        body: body.trim(),
+        recipientIds,
+      })
+    } catch (err) {
+      console.warn('Failed to send chat notifications:', err)
+    }
+  })()
+
   return data as ChatMessageRow
+}
+
+/**
+ * Updates an employee's last_read_at timestamp for a conversation in public.conversation_members.
+ */
+export async function markConversationAsRead(
+  conversationId: string,
+  employeeId: string
+): Promise<void> {
+  const { error } = await supabase
+    .from('conversation_members')
+    .update({ last_read_at: new Date().toISOString() })
+    .eq('conversation_id', conversationId)
+    .eq('employee_id', employeeId)
+
+  if (error) {
+    console.warn('Failed to mark conversation as read in Supabase:', error.message)
+  }
+}
+
+/**
+ * Updates a group conversation name.
+ * Supabase RLS enforces that only group creator or Chaitra (when member) can update.
+ */
+export async function updateGroupName(
+  conversationId: string,
+  name: string
+): Promise<void> {
+  const trimmed = name.trim()
+  if (!trimmed) {
+    throw new Error('Group name cannot be empty')
+  }
+
+  const { error } = await supabase
+    .from('conversations')
+    .update({ name: trimmed })
+    .eq('id', conversationId)
+    .eq('type', 'group')
+
+  throwIfError(error)
+}
+
+/**
+ * Adds new members to an existing group conversation.
+ */
+export async function addMembersToGroup(
+  conversationId: string,
+  newEmployeeIds: string[]
+): Promise<void> {
+  if (newEmployeeIds.length === 0) return
+
+  const rows = newEmployeeIds.map((employee_id) => ({
+    conversation_id: conversationId,
+    employee_id,
+  }))
+
+  const { error } = await supabase
+    .from('conversation_members')
+    .insert(rows)
+
+  throwIfError(error)
+}
+
+/**
+ * Leaves a group conversation by deleting the member row from public.conversation_members.
+ */
+export async function leaveGroup(
+  conversationId: string,
+  employeeId: string
+): Promise<void> {
+  const { error } = await supabase
+    .from('conversation_members')
+    .delete()
+    .eq('conversation_id', conversationId)
+    .eq('employee_id', employeeId)
+
+  throwIfError(error)
 }
 
 /**

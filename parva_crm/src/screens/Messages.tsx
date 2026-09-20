@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { Send, ArrowLeft, Search, Paperclip, FileText, X as XIcon, MessageCircle, Phone, Mail, PhoneMissed, PhoneOff, PhoneIncoming, Plus, Video, Users, Check, Trash2 } from 'lucide-react'
+import { Send, ArrowLeft, Search, Paperclip, FileText, X as XIcon, MessageCircle, Phone, Mail, PhoneMissed, PhoneOff, PhoneIncoming, Plus, Video, Users, Check, Trash2, Edit2, LogOut, UserPlus } from 'lucide-react'
 import { useData } from '../contexts/DataContext'
 import { supabase } from '../lib/supabase'
 import CallModal from '../components/ui/CallModal'
@@ -12,6 +12,10 @@ import {
   sendMessage as saveMessage,
   deleteMessage,
   deleteGroup,
+  markConversationAsRead,
+  updateGroupName,
+  addMembersToGroup,
+  leaveGroup,
   subscribeToChat,
   subscribeToMessages,
   getAllEmployees,
@@ -21,6 +25,7 @@ import {
   type ChatMessageRow,
   type ChatEmployee,
 } from '../services/chatService'
+import { markConversationNotificationsAsRead } from '../services/notificationService'
 import type { Dispatch, SetStateAction } from 'react'
 
 type Tab = 'chat' | 'calls' | 'email'
@@ -405,6 +410,14 @@ export default function Messages({
   const [deletingMessageLoading, setDeletingMessageLoading] = useState(false)
   const [showDeleteGroupConfirm, setShowDeleteGroupConfirm] = useState(false)
   const [deletingGroupLoading, setDeletingGroupLoading] = useState(false)
+  const [editingGroupName, setEditingGroupName] = useState(false)
+  const [editGroupNameInput, setEditGroupNameInput] = useState('')
+  const [savingGroupName, setSavingGroupName] = useState(false)
+  const [showAddMembersModal, setShowAddMembersModal] = useState(false)
+  const [newMemberSelection, setNewMemberSelection] = useState<Set<string>>(new Set())
+  const [addingMembersLoading, setAddingMembersLoading] = useState(false)
+  const [showLeaveGroupConfirm, setShowLeaveGroupConfirm] = useState(false)
+  const [leavingGroupLoading, setLeavingGroupLoading] = useState(false)
 
   // Resolve authentic Supabase user -> employee record & load all active employees
   useEffect(() => {
@@ -578,7 +591,17 @@ export default function Messages({
             .map((m) => toUiMessage(m, m.sender_id === activeEmployeeId ? contact.id : activeEmployeeId))
           : []
         const last = thread[thread.length - 1]
-        return { contact, thread, last, unread: 0 }
+        const myMember = conversation
+          ? chatState.members.find((m) => m.conversation_id === conversation.id && m.employee_id === activeEmployeeId)
+          : null
+        const unread = conversation && myMember
+          ? chatState.messages.filter((m) =>
+              m.conversation_id === conversation.id &&
+              m.sender_id !== activeEmployeeId &&
+              (!myMember.last_read_at || m.created_at > myMember.last_read_at)
+            ).length
+          : 0
+        return { contact, thread, last, unread }
       })
       .filter((c) => {
         if (!searchLower) return true
@@ -609,7 +632,15 @@ export default function Messages({
           .sort((a, b) => a.created_at.localeCompare(b.created_at))
           .map((m) => ({ ...toUiMessage(m), groupId: group.id, readBy: [m.sender_id] }))
         const last = thread[thread.length - 1]
-        return { group, thread, last, unread: 0 }
+        const myMember = chatState.members.find((m) => m.conversation_id === group.id && m.employee_id === activeEmployeeId)
+        const unread = myMember
+          ? chatState.messages.filter((m) =>
+              m.conversation_id === group.id &&
+              m.sender_id !== activeEmployeeId &&
+              (!myMember.last_read_at || m.created_at > myMember.last_read_at)
+            ).length
+          : 0
+        return { group, thread, last, unread }
       })
       .filter((g) => !searchLower || g.group.name.toLowerCase().includes(searchLower))
       .sort((a, b) => {
@@ -654,6 +685,9 @@ export default function Messages({
             messages: [...prev.messages, incomingRow],
           }
         })
+        if (incomingRow.sender_id !== activeEmployeeId) {
+          markCurrentAsRead(activeConvoId, selectedGroupConvo ? undefined : (selectedId || undefined))
+        }
       },
       (deletedMessageId) => {
         setChatState((prev) => ({
@@ -667,6 +701,112 @@ export default function Messages({
       unsubscribe()
     }
   }, [selectedId, selectedGroupConvo?.group.id, chatState.conversations, chatState.members, activeEmployeeId])
+
+  const markCurrentAsRead = (convoId: string, contactId?: string) => {
+    if (!convoId || !activeEmployeeId) return
+    void markConversationAsRead(convoId, activeEmployeeId)
+    void markConversationNotificationsAsRead(convoId, contactId, activeEmployeeId)
+    const nowIso = new Date().toISOString()
+    setChatState((prev) => ({
+      ...prev,
+      members: prev.members.map((m) =>
+        m.conversation_id === convoId && m.employee_id === activeEmployeeId
+          ? { ...m, last_read_at: nowIso }
+          : m
+      ),
+    }))
+  }
+
+  // Automatically mark active conversation read on selection or load
+  useEffect(() => {
+    if (!selectedId || !activeEmployeeId) return
+    if (selectedGroupConvo) {
+      markCurrentAsRead(selectedGroupConvo.group.id)
+    } else {
+      const convo = directConversationFor(selectedId)
+      if (convo) {
+        markCurrentAsRead(convo.id, selectedId)
+      }
+    }
+  }, [selectedId, activeEmployeeId, chatState.conversations.length, selectedGroupConvo?.group.id])
+
+  const handleSaveGroupName = async () => {
+    if (!selectedGroupConvo || !editGroupNameInput.trim()) return
+    try {
+      setSavingGroupName(true)
+      const trimmed = editGroupNameInput.trim()
+      await updateGroupName(selectedGroupConvo.group.id, trimmed)
+      setChatState((prev) => ({
+        ...prev,
+        groups: prev.groups.map((g) => g.id === selectedGroupConvo.group.id ? { ...g, name: trimmed } : g),
+        conversations: prev.conversations.map((c) => c.id === selectedGroupConvo.group.id ? { ...c, name: trimmed } : c),
+      }))
+      setEditingGroupName(false)
+    } catch (err) {
+      console.error('Failed to update group name:', err)
+      alert(err instanceof Error ? err.message : 'Could not update group name')
+    } finally {
+      setSavingGroupName(false)
+    }
+  }
+
+  const handleAddMembers = async () => {
+    if (!selectedGroupConvo || newMemberSelection.size === 0) return
+    try {
+      setAddingMembersLoading(true)
+      const memberIdsToAdd = Array.from(newMemberSelection)
+      await addMembersToGroup(selectedGroupConvo.group.id, memberIdsToAdd)
+      
+      const nowIso = new Date().toISOString()
+      const newMemberRows = memberIdsToAdd.map((employee_id) => ({
+        conversation_id: selectedGroupConvo.group.id,
+        employee_id,
+        joined_at: nowIso,
+        last_read_at: nowIso,
+      }))
+
+      setChatState((prev) => ({
+        ...prev,
+        members: [...prev.members, ...newMemberRows],
+        groups: prev.groups.map((g) =>
+          g.id === selectedGroupConvo.group.id
+            ? { ...g, memberIds: [...new Set([...g.memberIds, ...memberIdsToAdd])] }
+            : g
+        ),
+      }))
+      setShowAddMembersModal(false)
+      setNewMemberSelection(new Set())
+    } catch (err) {
+      console.error('Failed to add members:', err)
+      alert(err instanceof Error ? err.message : 'Could not add members to group')
+    } finally {
+      setAddingMembersLoading(false)
+    }
+  }
+
+  const handleLeaveGroup = async () => {
+    if (!selectedGroupConvo || !activeEmployeeId) return
+    try {
+      setLeavingGroupLoading(true)
+      await leaveGroup(selectedGroupConvo.group.id, activeEmployeeId)
+      
+      setChatState((prev) => ({
+        ...prev,
+        members: prev.members.filter(
+          (m) => !(m.conversation_id === selectedGroupConvo.group.id && m.employee_id === activeEmployeeId)
+        ),
+        groups: prev.groups.filter((g) => g.id !== selectedGroupConvo.group.id),
+      }))
+      setSelectedId(null)
+      setShowGroupInfo(false)
+      setShowLeaveGroupConfirm(false)
+    } catch (err) {
+      console.error('Failed to leave group:', err)
+      alert(err instanceof Error ? err.message : 'Could not leave group')
+    } finally {
+      setLeavingGroupLoading(false)
+    }
+  }
 
   const handleDeleteMessage = async () => {
     if (!deletingMessageId || !activeEmployeeId) return
@@ -762,6 +902,7 @@ export default function Messages({
       if (!chatState.conversations.some((c) => c.id === convoId)) {
         await reloadChat()
       }
+      markCurrentAsRead(convoId, contactId)
     } catch (err) {
       console.error('Failed to prepare direct conversation:', err)
     }
@@ -770,6 +911,7 @@ export default function Messages({
   const openGroup = (groupId: string) => {
     setSelectedId(groupId)
     setTab('chat')
+    markCurrentAsRead(groupId)
   }
 
   const send = async () => {
@@ -784,12 +926,14 @@ export default function Messages({
         conversationId = await createDirectConversation(activeEmployeeId, selectedId)
       }
 
+      const myEmp = allEmployees.find((e) => e.id === activeEmployeeId)
       const saved = await saveMessage(
         conversationId,
         activeEmployeeId,
         draft.trim(),
         pendingAttachment?.name,
-        pendingAttachment?.url
+        pendingAttachment?.url,
+        myEmp?.name
       )
 
       setDraft('')
@@ -1023,10 +1167,10 @@ export default function Messages({
                     </div>
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs text-muted-foreground truncate">
-                        {last ? `${employees.find((e) => e.id === last.senderId)?.name.split(' ')[0]}: ${last.text || 'Sent an attachment'}` : `${group.memberIds.length} members`}
+                        {last ? `${allEmployees.find((e) => e.id === last.senderId)?.name.split(' ')[0] || 'Someone'}: ${last.text || (last.attachmentName ? 'Attachment' : 'Sent an attachment')}` : `${group.memberIds.length} members`}
                       </p>
                       {unread > 0 && (
-                        <span className="ml-1 flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold text-white shrink-0" style={{ backgroundColor: '#C9A96E' }}>
+                        <span className="ml-1 flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-[10px] font-bold text-white shrink-0 shadow-sm" style={{ backgroundColor: '#C9A96E' }}>
                           {unread}
                         </span>
                       )}
@@ -1058,10 +1202,10 @@ export default function Messages({
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <p className={`text-xs text-muted-foreground truncate ${last ? '' : 'capitalize'}`}>
-                    {last ? last.text : `${contact.role} · ${contact.team}`}
+                    {last ? (last.text || (last.attachmentName ? 'Attachment' : 'Sent an attachment')) : `${contact.role} · ${contact.team}`}
                   </p>
                   {unread > 0 && (
-                    <span className="ml-1 flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold text-white shrink-0" style={{ backgroundColor: '#C9A96E' }}>
+                    <span className="ml-1 flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-[10px] font-bold text-white shrink-0 shadow-sm" style={{ backgroundColor: '#C9A96E' }}>
                       {unread}
                     </span>
                   )}
@@ -1704,108 +1848,281 @@ export default function Messages({
         </div>
       </Modal>
 
-      <Modal open={showGroupInfo && !!selectedGroupConvo} onClose={() => setShowGroupInfo(false)} title="Group Info">
+      <Modal open={showGroupInfo && !!selectedGroupConvo} onClose={() => { setShowGroupInfo(false); setEditingGroupName(false); }} title="Group Info">
         {selectedGroupConvo && (
           <div className="space-y-5">
-            <div className="flex items-center gap-4">
-              <div
-                className="w-14 h-14 rounded-2xl flex items-center justify-center shrink-0"
-                style={{ backgroundColor: 'rgba(201,169,110,0.15)', color: '#C9A96E' }}
-              >
-                <Users size={22} />
-              </div>
-              <div>
-                <h3 className="font-serif text-lg font-semibold text-foreground">{selectedGroupConvo.group.name}</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Created {selectedGroupConvo.group.createdAt} by {allEmployees.find((e) => e.id === selectedGroupConvo.group.createdBy)?.name || 'Unknown'}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={() => { setShowGroupInfo(false); startGroupCall(selectedGroupConvo.group.id, 'voice') }}
-                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold"
-                style={{ backgroundColor: 'rgba(16,185,129,0.1)', color: '#10B981' }}
-              >
-                <Phone size={14} /> Voice Call
-              </button>
-              <button
-                onClick={() => { setShowGroupInfo(false); startGroupCall(selectedGroupConvo.group.id, 'video') }}
-                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold"
-                style={{ backgroundColor: 'rgba(37,99,235,0.1)', color: '#2563EB' }}
-              >
-                <Video size={14} /> Video Call
-              </button>
-              <button
-                onClick={() => { setShowGroupInfo(false); setTab('email'); setShowCompose(true) }}
-                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold"
-                style={{ backgroundColor: 'rgba(201,169,110,0.12)', color: '#C9A96E' }}
-              >
-                <Mail size={14} /> Email
-              </button>
-            </div>
-
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">
-                {selectedGroupConvo.group.memberIds.length} Members
-              </p>
-              <div className="space-y-1 max-h-64 overflow-y-auto">
-                {selectedGroupConvo.group.memberIds.map((id) => {
-                  const member = allEmployees.find((e) => e.id === id)
-                  if (!member) return null
-                  const isYou = id === activeEmployeeId
-                  const isMemberCreator = id === selectedGroupConvo.group.createdBy
-                  const isMemberChaitra = member.role === 'admin' || member.email === 'chaitra@parvarealty.ae'
-                  return (
-                    <div key={id} className="flex items-center gap-3 px-2 py-2 rounded-lg">
-                      <div
-                        className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
-                        style={{ backgroundColor: 'rgba(28,43,74,0.1)', color: '#1C2B4A' }}
-                      >
-                        {initials(member.name)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-foreground truncate">{member.name} {isYou && <span className="text-muted-foreground font-normal">(you)</span>}</p>
-                        <p className="text-xs text-muted-foreground capitalize truncate">{member.role} · {member.team}</p>
-                      </div>
-                      {isMemberCreator ? (
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: 'rgba(201,169,110,0.12)', color: '#C9A96E' }}>
-                          Creator
-                        </span>
-                      ) : isMemberChaitra ? (
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: 'rgba(28,43,74,0.1)', color: '#1C2B4A' }}>
-                          Admin
-                        </span>
-                      ) : null}
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-
             {(() => {
               const isCurrentCreator = selectedGroupConvo.group.createdBy === activeEmployeeId
               const myEmp = allEmployees.find((e) => e.id === activeEmployeeId)
               const isChaitraAdmin = (myEmp?.role === 'admin' || myEmp?.email === 'chaitra@parvarealty.ae' || role === 'admin')
               const isChaitraMember = isChaitraAdmin && selectedGroupConvo.group.memberIds.includes(activeEmployeeId)
+              const canManageThisGroup = isCurrentCreator || isChaitraMember
               const canDeleteThisGroup = isCurrentCreator || isChaitraMember
 
-              if (!canDeleteThisGroup) return null
-
               return (
-                <div className="pt-3 border-t border-border">
-                  <button
-                    onClick={() => setShowDeleteGroupConfirm(true)}
-                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
-                  >
-                    <Trash2 size={14} /> Delete Group
-                  </button>
-                </div>
+                <>
+                  <div className="flex items-center gap-4">
+                    <div
+                      className="w-14 h-14 rounded-2xl flex items-center justify-center shrink-0"
+                      style={{ backgroundColor: 'rgba(201,169,110,0.15)', color: '#C9A96E' }}
+                    >
+                      <Users size={22} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      {editingGroupName ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={editGroupNameInput}
+                            onChange={(e) => setEditGroupNameInput(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && void handleSaveGroupName()}
+                            className="flex-1 px-3 py-1.5 text-sm font-semibold rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-accent/30"
+                            placeholder="Group name"
+                            autoFocus
+                          />
+                          <button
+                            onClick={() => void handleSaveGroupName()}
+                            disabled={savingGroupName || !editGroupNameInput.trim()}
+                            className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-opacity disabled:opacity-50 shrink-0"
+                            style={{ backgroundColor: '#1C2B4A' }}
+                          >
+                            {savingGroupName ? 'Saving…' : 'Save'}
+                          </button>
+                          <button
+                            onClick={() => setEditingGroupName(false)}
+                            className="px-2 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-foreground shrink-0"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-serif text-lg font-semibold text-foreground truncate">{selectedGroupConvo.group.name}</h3>
+                          {canManageThisGroup && (
+                            <button
+                              onClick={() => {
+                                setEditGroupNameInput(selectedGroupConvo.group.name)
+                                setEditingGroupName(true)
+                              }}
+                              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+                              title="Edit group name"
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Created {selectedGroupConvo.group.createdAt} by {allEmployees.find((e) => e.id === selectedGroupConvo.group.createdBy)?.name || 'Unknown'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setShowGroupInfo(false); startGroupCall(selectedGroupConvo.group.id, 'voice') }}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold"
+                      style={{ backgroundColor: 'rgba(16,185,129,0.1)', color: '#10B981' }}
+                    >
+                      <Phone size={14} /> Voice Call
+                    </button>
+                    <button
+                      onClick={() => { setShowGroupInfo(false); startGroupCall(selectedGroupConvo.group.id, 'video') }}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold"
+                      style={{ backgroundColor: 'rgba(37,99,235,0.1)', color: '#2563EB' }}
+                    >
+                      <Video size={14} /> Video Call
+                    </button>
+                    <button
+                      onClick={() => { setShowGroupInfo(false); setTab('email'); setShowCompose(true) }}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold"
+                      style={{ backgroundColor: 'rgba(201,169,110,0.12)', color: '#C9A96E' }}
+                    >
+                      <Mail size={14} /> Email
+                    </button>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                        {selectedGroupConvo.group.memberIds.length} Members
+                      </p>
+                      {canManageThisGroup && (
+                        <button
+                          onClick={() => {
+                            setNewMemberSelection(new Set())
+                            setShowAddMembersModal(true)
+                          }}
+                          className="flex items-center gap-1 text-xs font-semibold text-accent hover:underline"
+                        >
+                          <UserPlus size={13} /> Add Members
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-1 max-h-60 overflow-y-auto">
+                      {selectedGroupConvo.group.memberIds.map((id) => {
+                        const member = allEmployees.find((e) => e.id === id)
+                        if (!member) return null
+                        const isYou = id === activeEmployeeId
+                        const isMemberCreator = id === selectedGroupConvo.group.createdBy
+                        const isMemberChaitra = member.role === 'admin' || member.email === 'chaitra@parvarealty.ae'
+                        return (
+                          <div key={id} className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-muted/30 transition-colors">
+                            <div
+                              className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
+                              style={{ backgroundColor: 'rgba(28,43,74,0.1)', color: '#1C2B4A' }}
+                            >
+                              {initials(member.name)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-foreground truncate">{member.name} {isYou && <span className="text-muted-foreground font-normal">(you)</span>}</p>
+                              <p className="text-xs text-muted-foreground capitalize truncate">{member.role} · {member.team}</p>
+                            </div>
+                            {isMemberCreator ? (
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: 'rgba(201,169,110,0.12)', color: '#C9A96E' }}>
+                                Creator
+                              </span>
+                            ) : isMemberChaitra ? (
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: 'rgba(28,43,74,0.1)', color: '#1C2B4A' }}>
+                                Admin
+                              </span>
+                            ) : null}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-border space-y-2">
+                    {!isCurrentCreator && selectedGroupConvo.group.memberIds.includes(activeEmployeeId) && (
+                      <button
+                        onClick={() => setShowLeaveGroupConfirm(true)}
+                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
+                      >
+                        <LogOut size={14} /> Leave Group
+                      </button>
+                    )}
+                    {isCurrentCreator && (
+                      <p className="text-[11px] text-muted-foreground text-center">
+                        You are the group creator. Creators cannot leave; you can delete the group below.
+                      </p>
+                    )}
+                    {canDeleteThisGroup && (
+                      <button
+                        onClick={() => setShowDeleteGroupConfirm(true)}
+                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
+                      >
+                        <Trash2 size={14} /> Delete Group
+                      </button>
+                    )}
+                  </div>
+                </>
               )
             })()}
           </div>
         )}
+      </Modal>
+
+      {/* Add Members to Group Modal */}
+      <Modal
+        open={showAddMembersModal && !!selectedGroupConvo}
+        onClose={() => {
+          setShowAddMembersModal(false)
+          setNewMemberSelection(new Set())
+        }}
+        title={`Add Members to ${selectedGroupConvo?.group.name}`}
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Select employees to add to this group:
+          </p>
+          <div className="space-y-1.5 max-h-60 overflow-y-auto">
+            {allEmployees
+              .filter((e) => e.status !== 'inactive' && !selectedGroupConvo?.group.memberIds.includes(e.id))
+              .map((employee) => {
+                const isSelected = newMemberSelection.has(employee.id)
+                return (
+                  <label
+                    key={employee.id}
+                    className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted/40 cursor-pointer transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => {
+                        setNewMemberSelection((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(employee.id)) next.delete(employee.id)
+                          else next.add(employee.id)
+                          return next
+                        })
+                      }}
+                      className="rounded text-accent focus:ring-accent/30"
+                    />
+                    <div
+                      className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
+                      style={{ backgroundColor: 'rgba(28,43,74,0.1)', color: '#1C2B4A' }}
+                    >
+                      {initials(employee.name)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{employee.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{employee.role} · {employee.team}</p>
+                    </div>
+                  </label>
+                )
+              })}
+            {allEmployees.filter((e) => e.status !== 'inactive' && !selectedGroupConvo?.group.memberIds.includes(e.id)).length === 0 && (
+              <p className="text-xs text-muted-foreground text-center py-4">All active employees are already in this group.</p>
+            )}
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => {
+                setShowAddMembersModal(false)
+                setNewMemberSelection(new Set())
+              }}
+              className="flex-1 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleAddMembers}
+              disabled={newMemberSelection.size === 0 || addingMembersLoading}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition-colors disabled:opacity-50"
+              style={{ backgroundColor: '#1C2B4A' }}
+            >
+              {addingMembersLoading ? 'Adding…' : `Add ${newMemberSelection.size > 0 ? `(${newMemberSelection.size})` : ''}`}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Leave Group Confirmation Modal */}
+      <Modal
+        open={showLeaveGroupConfirm && !!selectedGroupConvo}
+        onClose={() => setShowLeaveGroupConfirm(false)}
+        title="Leave Group?"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Are you sure you want to leave <span className="font-semibold text-foreground">"{selectedGroupConvo?.group.name}"</span>? You will no longer receive new messages or participate in this group.
+          </p>
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => setShowLeaveGroupConfirm(false)}
+              className="flex-1 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleLeaveGroup}
+              disabled={leavingGroupLoading}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white bg-amber-600 hover:bg-amber-700 transition-colors disabled:opacity-50"
+            >
+              {leavingGroupLoading ? 'Leaving…' : 'Leave Group'}
+            </button>
+          </div>
+        </div>
       </Modal>
 
       {/* Delete Message Confirmation Modal */}

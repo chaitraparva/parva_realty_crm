@@ -199,3 +199,97 @@ export async function markAllNotificationsAsRead(
         console.error('Failed to mark all notifications as read in Supabase:', error.message)
     }
 }
+
+export interface SendChatMessageNotificationParams {
+    senderId: string
+    senderName: string
+    conversationId: string
+    conversationType: 'direct' | 'group' | string
+    groupName?: string | null
+    body: string
+    recipientIds: string[]
+}
+
+/**
+ * Creates incoming chat notifications for conversation recipients.
+ * Direct chat: "Mithun sent you a message" / "Hey, are you available?"
+ * Group chat: "Sales Team" / "Mithun: Hey everyone..."
+ * Never creates notifications for the sender.
+ */
+export async function sendChatMessageNotifications(
+    params: SendChatMessageNotificationParams
+): Promise<void> {
+    try {
+        const recipients = params.recipientIds.filter((id) => id && id !== params.senderId)
+        if (recipients.length === 0) return
+
+        const isGroup = params.conversationType === 'group'
+        const title = isGroup
+            ? (params.groupName || 'Group')
+            : `${params.senderName} sent you a message`
+
+        const previewText = params.body || 'Sent an attachment'
+        const preview = previewText.length > 80
+            ? `${previewText.slice(0, 77)}...`
+            : previewText
+
+        const message = isGroup
+            ? `${params.senderName}: ${preview}`
+            : preview
+
+        const link = isGroup
+            ? `messages?groupId=${params.conversationId}`
+            : `messages?employeeId=${params.senderId}`
+
+        const rows = recipients.map((recipientId) => ({
+            id: crypto.randomUUID(),
+            employee_id: recipientId,
+            type: 'chat_message',
+            title,
+            message,
+            is_read: false,
+            link,
+        }))
+
+        const { error } = await supabase.from('notifications').insert(rows)
+        if (error) {
+            console.error('Failed to send chat notifications:', error.message)
+        }
+    } catch (err) {
+        console.error('Unexpected error in sendChatMessageNotifications:', err)
+    }
+}
+
+/**
+ * Marks incoming chat notifications corresponding to a conversation as read.
+ */
+export async function markConversationNotificationsAsRead(
+    conversationId: string,
+    senderContactId: string | undefined,
+    employeeId: string
+): Promise<void> {
+    try {
+        const linkGroup = `messages?groupId=${conversationId}`
+        const linkContact = senderContactId ? `messages?employeeId=${senderContactId}` : null
+
+        let query = supabase
+            .from('notifications')
+            .update({ is_read: true })
+            .eq('employee_id', employeeId)
+            .eq('is_read', false)
+
+        if (linkContact) {
+            query = query.or(`link.eq.${linkGroup},link.eq.${linkContact}`)
+        } else {
+            query = query.eq('link', linkGroup)
+        }
+
+        const { error } = await query
+        if (error) {
+            console.warn('Failed to mark chat notifications as read:', error.message)
+        }
+    } catch (err) {
+        console.warn('Unexpected error marking chat notifications as read:', err)
+    }
+}
+
