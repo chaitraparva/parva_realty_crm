@@ -59,6 +59,19 @@ function throwIfError(error: { message?: string } | null) {
 }
 
 /**
+ * Detects if a PostgREST/Postgres error is specifically due to the missing last_read_at column.
+ */
+function isMissingLastReadAtColumn(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error) return false
+  return (
+    error.code === '42703' ||
+    (typeof error.message === 'string' &&
+      error.message.toLowerCase().includes('last_read_at') &&
+      error.message.toLowerCase().includes('does not exist'))
+  )
+}
+
+/**
  * Resolves the authenticated Supabase user -> profile -> employee record.
  * Uses auth user ID -> profiles.id -> profiles.employee_id -> employees.id
  */
@@ -318,12 +331,29 @@ export async function getConversationMessages(conversationId: string): Promise<C
  * their conversations, all members in those conversations, groups, and messages.
  */
 export async function loadChatState(employeeId: string): Promise<ChatState> {
-  const { data: myMemberships, error: membershipError } = await supabase
+  let myMemberships: any[] | null = null
+  const { data: firstMyMemberships, error: firstMembershipError } = await supabase
     .from('conversation_members')
     .select('conversation_id, employee_id, joined_at, last_read_at')
     .eq('employee_id', employeeId)
 
-  throwIfError(membershipError)
+  if (firstMembershipError) {
+    if (isMissingLastReadAtColumn(firstMembershipError)) {
+      // Gracefully fall back to querying without last_read_at if column does not exist
+      const { data: fallbackMyMemberships, error: fallbackError } = await supabase
+        .from('conversation_members')
+        .select('conversation_id, employee_id, joined_at')
+        .eq('employee_id', employeeId)
+
+      throwIfError(fallbackError)
+      myMemberships = fallbackMyMemberships
+    } else {
+      // Re-throw any other database / auth / network error
+      throwIfError(firstMembershipError)
+    }
+  } else {
+    myMemberships = firstMyMemberships
+  }
 
   const conversationIds = [...new Set((myMemberships ?? []).map((m) => m.conversation_id))]
   if (conversationIds.length === 0) {
@@ -332,17 +362,27 @@ export async function loadChatState(employeeId: string): Promise<ChatState> {
 
   const [
     { data: conversations, error: conversationError },
-    { data: members, error: membersError },
+    membersResult,
     { data: messages, error: messagesError },
   ] = await Promise.all([
     supabase
       .from('conversations')
       .select('id, type, name, created_by, created_at')
       .in('id', conversationIds),
-    supabase
-      .from('conversation_members')
-      .select('conversation_id, employee_id, joined_at, last_read_at')
-      .in('conversation_id', conversationIds),
+    (async () => {
+      const first = await supabase
+        .from('conversation_members')
+        .select('conversation_id, employee_id, joined_at, last_read_at')
+        .in('conversation_id', conversationIds)
+
+      if (first.error && isMissingLastReadAtColumn(first.error)) {
+        return supabase
+          .from('conversation_members')
+          .select('conversation_id, employee_id, joined_at')
+          .in('conversation_id', conversationIds)
+      }
+      return first
+    })(),
     supabase
       .from('messages')
       .select('id, conversation_id, sender_id, body, created_at, attachment_name, attachment_url')
@@ -351,9 +391,10 @@ export async function loadChatState(employeeId: string): Promise<ChatState> {
   ])
 
   throwIfError(conversationError)
-  throwIfError(membersError)
+  throwIfError(membersResult.error)
   throwIfError(messagesError)
 
+  const members = membersResult.data
   const groupRows = (conversations ?? []).filter((c) => c.type === 'group')
   const groups: ChatGroup[] = groupRows.map((group) => ({
     id: group.id,
@@ -456,7 +497,7 @@ export async function markConversationAsRead(
     .eq('conversation_id', conversationId)
     .eq('employee_id', employeeId)
 
-  if (error) {
+  if (error && !isMissingLastReadAtColumn(error)) {
     console.warn('Failed to mark conversation as read in Supabase:', error.message)
   }
 }
