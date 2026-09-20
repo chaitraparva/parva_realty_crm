@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { RotateCcw, Bell, Moon, Loader2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { getCurrentEmployee } from '../services/chatService'
 
 const DEFAULTS = {
   roundRobin: true,
@@ -67,13 +66,62 @@ export default function Settings({
         setLoading(true)
         setError('')
 
-        const employee = await getCurrentEmployee()
+        // Get the real currently authenticated Supabase user
+        const {
+          data: { user },
+          error: authError,
+        } = await supabase.auth.getUser()
+
+        if (authError) {
+          throw authError
+        }
+
+        if (!user) {
+          throw new Error('No authenticated user found.')
+        }
+
+        // Resolve authenticated user -> profile -> employee
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('employee_id')
+          .eq('id', user.id)
+          .maybeSingle()
+
+        if (profileError) {
+          throw profileError
+        }
+
+        let resolvedEmployeeId = profile?.employee_id ?? null
+
+        // Fallback to employee email if profile doesn't contain employee_id
+        if (!resolvedEmployeeId && user.email) {
+          const { data: employee, error: employeeError } = await supabase
+            .from('employees')
+            .select('id')
+            .eq('email', user.email)
+            .maybeSingle()
+
+          if (employeeError) {
+            throw employeeError
+          }
+
+          resolvedEmployeeId = employee?.id ?? null
+        }
+
+        if (!resolvedEmployeeId) {
+          throw new Error(
+            'Could not find the employee record for this account.'
+          )
+        }
 
         if (!active) return
 
-        setEmployeeId(employee.id)
+        setEmployeeId(resolvedEmployeeId)
 
-        const { data, error: settingsError } = await supabase
+        const {
+          data: settings,
+          error: settingsError,
+        } = await supabase
           .from('employee_settings')
           .select(`
             employee_id,
@@ -87,18 +135,21 @@ export default function Settings({
             notif_payroll,
             notif_leave
           `)
-          .eq('employee_id', employee.id)
+          .eq('employee_id', resolvedEmployeeId)
           .maybeSingle()
 
-        if (settingsError) throw settingsError
+        if (settingsError) {
+          throw settingsError
+        }
 
         if (!active) return
 
-        if (!data) {
+        // First time this employee opens Settings
+        if (!settings) {
           const { error: insertError } = await supabase
             .from('employee_settings')
             .insert({
-              employee_id: employee.id,
+              employee_id: resolvedEmployeeId,
               dark_mode: false,
               round_robin: DEFAULTS.roundRobin,
               auto_assign: DEFAULTS.autoAssign,
@@ -110,21 +161,28 @@ export default function Settings({
               notif_leave: DEFAULTS.notifLeave,
             })
 
-          if (insertError) throw insertError
+          if (insertError) {
+            throw insertError
+          }
 
           return
         }
 
-        const settings = data as EmployeeSettingsRow
+        const row = settings as EmployeeSettingsRow
 
-        setRoundRobin(settings.round_robin)
-        setAutoAssign(settings.auto_assign)
-        setFollowUpHours(String(settings.follow_up_hours))
-        setUnassignedAlert(String(settings.unassigned_alert_hours))
-        setNotifMissedFollowup(settings.notif_missed_followup)
-        setNotifUnassigned(settings.notif_unassigned)
-        setNotifPayroll(settings.notif_payroll)
-        setNotifLeave(settings.notif_leave)
+        setRoundRobin(row.round_robin)
+        setAutoAssign(row.auto_assign)
+        setFollowUpHours(String(row.follow_up_hours))
+        setUnassignedAlert(String(row.unassigned_alert_hours))
+        setNotifMissedFollowup(row.notif_missed_followup)
+        setNotifUnassigned(row.notif_unassigned)
+        setNotifPayroll(row.notif_payroll)
+        setNotifLeave(row.notif_leave)
+
+        // Sync saved dark mode with App state
+        if (row.dark_mode !== darkMode) {
+          onToggleDarkMode?.()
+        }
       } catch (err) {
         console.error('Could not load employee settings:', err)
 
@@ -136,7 +194,9 @@ export default function Settings({
             : 'Could not load your settings.'
         )
       } finally {
-        if (active) setLoading(false)
+        if (active) {
+          setLoading(false)
+        }
       }
     }
 
@@ -209,7 +269,9 @@ export default function Settings({
           }
         )
 
-      if (saveError) throw saveError
+      if (saveError) {
+        throw saveError
+      }
 
       setSaved(true)
 
@@ -280,7 +342,6 @@ export default function Settings({
         </div>
       )}
 
-      {/* Appearance */}
       <div className="bg-card rounded-xl border border-border shadow-sm">
         <div className="p-5 border-b border-border flex items-center gap-3">
           <div
@@ -319,7 +380,6 @@ export default function Settings({
         </div>
       </div>
 
-      {/* Lead Assignment */}
       <div className="bg-card rounded-xl border border-border shadow-sm">
         <div className="p-5 border-b border-border flex items-center gap-3">
           <div
@@ -350,10 +410,7 @@ export default function Settings({
               </p>
             </div>
 
-            <Toggle
-              value={roundRobin}
-              onChange={setRoundRobin}
-            />
+            <Toggle value={roundRobin} onChange={setRoundRobin} />
           </div>
 
           <div className="flex items-center justify-between">
@@ -366,10 +423,7 @@ export default function Settings({
               </p>
             </div>
 
-            <Toggle
-              value={autoAssign}
-              onChange={setAutoAssign}
-            />
+            <Toggle value={autoAssign} onChange={setAutoAssign} />
           </div>
 
           <div>
@@ -394,7 +448,6 @@ export default function Settings({
         </div>
       </div>
 
-      {/* Notifications */}
       <div className="bg-card rounded-xl border border-border shadow-sm">
         <div className="p-5 border-b border-border flex items-center gap-3">
           <div
@@ -484,7 +537,6 @@ export default function Settings({
         </div>
       </div>
 
-      {/* Actions */}
       <div className="flex justify-end gap-3">
         <button
           type="button"
