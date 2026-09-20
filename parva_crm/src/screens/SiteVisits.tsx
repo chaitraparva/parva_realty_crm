@@ -12,7 +12,6 @@ import {
   Loader2,
 } from 'lucide-react'
 
-import { projects } from '../data/mockData'
 import { useData } from '../contexts/DataContext'
 import Modal from '../components/ui/Modal'
 import type {

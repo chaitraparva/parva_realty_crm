@@ -1,15 +1,4 @@
 import { useState, useEffect } from 'react'
-import {
-  messages as initialMessages,
-  callLogs as initialCallLogs,
-  internalEmails as initialEmails,
-  groups as initialGroups,
-  groupMessages as initialGroupMessages,
-  auditLog as initialAuditLog,
-  flags as initialFlags,
-  siteVisits as initialSiteVisits,
-  escalationRequests as initialEscalations,
-} from './data/mockData'
 
 import type {
   Role,
@@ -290,30 +279,22 @@ function AuthenticatedApp({
   const [
     groupList,
     setGroupList,
-  ] = useState<Group[]>(
-    initialGroups
-  )
+  ] = useState<Group[]>([])
 
   const [
     auditLog,
     setAuditLog,
-  ] = useState<AuditEntry[]>(
-    initialAuditLog
-  )
+  ] = useState<AuditEntry[]>([])
 
   const [
     flagList,
     setFlagList,
-  ] = useState<Flag[]>(
-    initialFlags
-  )
+  ] = useState<Flag[]>([])
 
   const [
     visitList,
     setVisitList,
-  ] = useState<SiteVisit[]>(
-    initialSiteVisits
-  )
+  ] = useState<SiteVisit[]>([])
 
   const [
     unitPhotos,
@@ -323,37 +304,27 @@ function AuthenticatedApp({
   const [
     escalations,
     setEscalations,
-  ] = useState<EscalationRequest[]>(
-    initialEscalations
-  )
+  ] = useState<EscalationRequest[]>([])
 
   const [
     msgList,
     setMsgList,
-  ] = useState<Message[]>(
-    initialMessages
-  )
+  ] = useState<Message[]>([])
 
   const [
     callLogsList,
     setCallLogsList,
-  ] = useState<CallLog[]>(
-    initialCallLogs
-  )
+  ] = useState<CallLog[]>([])
 
   const [
     emailsList,
     setEmailsList,
-  ] = useState<InternalEmail[]>(
-    initialEmails
-  )
+  ] = useState<InternalEmail[]>([])
 
   const [
     groupMsgsList,
     setGroupMsgsList,
-  ] = useState<GroupMessage[]>(
-    initialGroupMessages
-  )
+  ] = useState<GroupMessage[]>([])
 
   /*
    * ============================================================

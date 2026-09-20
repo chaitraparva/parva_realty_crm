@@ -1,19 +1,36 @@
+import { useState, useEffect } from 'react'
 import { LayoutDashboard, Users, Target, Building2 } from 'lucide-react'
-import { projects } from '../../data/mockData'
 import { useData } from '../../contexts/DataContext'
+import { supabase } from '../../lib/supabase'
 import KPICard from '../../components/ui/KPICard'
 
 export default function AdminDashboard() {
   const { employees, leads } = useData()
+  const [propertyCount, setPropertyCount] = useState<number | null>(null)
   const totalLeads = leads.length
   const teamSize = employees.filter((e) => e.status === 'active').length
+
+  useEffect(() => {
+    let active = true
+    void supabase
+      .from('inventory_projects')
+      .select('id', { count: 'exact', head: true })
+      .then(({ count, error }) => {
+        if (active && !error && count !== null) {
+          setPropertyCount(count)
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [])
 
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-5">
         <KPICard title="Total Leads"      value={totalLeads || '—'} sub="Active pipeline"     accent icon={<Target size={18} />} />
         <KPICard title="Team Members"     value={teamSize}          sub="Across India & Dubai"       icon={<Users size={18} />} />
-        <KPICard title="Properties Listed" value={projects.length}  sub="In inventory"               icon={<Building2 size={18} />} />
+        <KPICard title="Properties Listed" value={propertyCount !== null ? propertyCount : '—'} sub="In inventory" icon={<Building2 size={18} />} />
         <KPICard title="Conversions"      value="—"                 sub="No data yet"                icon={<LayoutDashboard size={18} />} />
       </div>
 

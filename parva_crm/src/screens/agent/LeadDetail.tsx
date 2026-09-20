@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { ArrowLeft, Phone, Mail, MessageCircle, Building2, Clock, Plus, MapPin, IndianRupee, AlertTriangle, FileSignature, CheckCircle2, ExternalLink, XCircle, RotateCcw, ArrowRightCircle, Flag as FlagIcon, Plane, ClipboardCheck } from 'lucide-react'
-import { units, projects } from '../../data/mockData'
 import { useData } from '../../contexts/DataContext'
 import { leadsApi, approvalsApi, ApiError } from '../../services/api'
 import { StatusBadge, SourceBadge, LeadScoreBadge, WorkloadBadge } from '../../components/ui/Badge'

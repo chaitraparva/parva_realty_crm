@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
 import { Search, Filter, Plus, Phone, Clock, ChevronRight, AlertTriangle, Flag as FlagIcon, Mail, Pencil, UserCog, Building2 } from 'lucide-react'
-import { siteVisits } from '../../data/mockData'
 import { useData, mapLead } from '../../contexts/DataContext'
 import { leadsApi, ApiError } from '../../services/api'
 import { getCurrentEmployeeSettings } from '../../services/employeeSettings'

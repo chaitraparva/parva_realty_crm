@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Building2, MapPin, ShieldCheck, ShieldAlert, ShieldX, Search, Image as ImageIcon, Upload, X, Eye, Ruler, Compass, IndianRupee, Layers, CalendarClock, Plus, ExternalLink, Trash2 } from 'lucide-react'
-import { projects as mockProjects, units as mockUnits } from '../data/mockData'
 import { supabase } from '../lib/supabase'
 import Modal from '../components/ui/Modal'
 import type { Role } from '../types'
@@ -234,7 +233,6 @@ export default function Inventory({ role = 'agent', unitPhotos, setUnitPhotos }:
     price: Number(u.price ?? 0),
     status: u.status,
     photos: [
-      ...(((mockUnits.find((mu: any) => mu.id === u.legacy_id) as any)?.photos || []) as string[]),
       ...storedPhotos.map((p) => p.public_url),
       ...(project?.galleryImages?.filter(Boolean) || []).slice(0, 0),
     ],
@@ -244,118 +242,39 @@ export default function Inventory({ role = 'agent', unitPhotos, setUnitPhotos }:
     setError('')
     setLoading(true)
     try {
-      let { data: projectRows, error: projectError } = await supabase
+      const { data: finalProjects, error: finalProjectError } = await supabase
         .from('inventory_projects')
         .select('*')
         .order('created_at', { ascending: true })
-      if (projectError) throw projectError
-
-      // First run: migrate the existing mock projects/units into Supabase once.
-      if (!projectRows?.length && mockProjects.length) {
-        const employeeId = await getCurrentEmployeeId()
-
-        const projectPayload = (mockProjects as any[]).map((p) => ({
-          legacy_id: String(p.id),
-          name: p.name,
-          developer: p.developer || '—',
-          location: p.location || null,
-          zone: p.zone || 'JVC',
-          property_type: p.propertyType || 'Apartment',
-          unit_types: p.unitTypes || null,
-          tier: p.tier || 'Mid-Range',
-          tag_label: p.tagLabel || 'NEW',
-          rera_status: p.reraStatus || 'Registered',
-          possession_date: p.possessionDate || p.handoverQ || null,
-          price_inr: p.priceINR || null,
-          price_aed: p.priceAED || null,
-          rental_yield: Number(p.rentalYield || 0),
-          appreciation: Number(p.appreciation || 0),
-          min_deposit: p.minDeposit || null,
-          area_range: p.areaRange || null,
-          completion_q: p.completionQ || p.handoverQ || null,
-          handover_q: p.handoverQ || p.completionQ || null,
-          floors: Number(p.floors || 0),
-          total_units: Number(p.totalUnits || 0),
-          available_inventory: Number(p.availableInventory ?? p.totalUnits ?? 0),
-          listing_status: p.listingStatus || 'Available',
-          standout: p.standout || null,
-          amenities: Array.isArray(p.amenities) ? p.amenities : [],
-          payment_plan: Array.isArray(p.paymentPlan) ? p.paymentPlan : [],
-          hero_image_url: typeof p.heroImage === 'string' ? p.heroImage : null,
-          gallery_image_urls: Array.isArray(p.galleryImages) ? p.galleryImages : [],
-          created_by: employeeId,
-        }))
-        const { error: seedProjectError } = await supabase
-          .from('inventory_projects')
-          .upsert(projectPayload, { onConflict: 'legacy_id' })
-        if (seedProjectError) throw seedProjectError
-
-        const { data: seededProjects, error: seededProjectsError } = await supabase
-          .from('inventory_projects').select('*').order('created_at', { ascending: true })
-        if (seededProjectsError) throw seededProjectsError
-        projectRows = seededProjects || []
-
-        const projectIdByLegacy = new Map<string, string>((projectRows as DbProject[]).map((p) => [String(p.legacy_id), p.id]))
-        const unitPayload = (mockUnits as any[])
-          .map((u) => {
-            const projectId = projectIdByLegacy.get(String(u.projectId))
-            if (!projectId) return null
-            return {
-              legacy_id: String(u.id),
-              project_id: projectId,
-              unit_number: String(u.unitNumber || u.id),
-              bhk: String(u.bhk || '—'),
-              floor: String(u.floor ?? '—'),
-              area_sqft: Number(u.areaSqft || 0),
-              facing: String(u.facing || '—'),
-              price: Number(u.price || 0),
-              status: ['Available', 'Held', 'Sold'].includes(u.status) ? u.status : 'Available',
-            }
-          })
-          .filter(Boolean)
-        if (unitPayload.length) {
-          const { error: seedUnitError } = await supabase
-            .from('inventory_units')
-            .upsert(unitPayload, { onConflict: 'legacy_id' })
-          if (seedUnitError) throw seedUnitError
-        }
-
-        const { data: seededUnits } = await supabase
-          .from('inventory_units').select('*')
-        const unitIdByLegacy = new Map<string, string>((seededUnits || []).map((u: DbUnit) => [String(u.legacy_id), u.id]))
-        const photoPayload = (mockUnits as any[])
-          .flatMap((u) => {
-            const unitId = unitIdByLegacy.get(String(u.id))
-            const photos = Array.isArray(u.photos) ? u.photos : []
-            return unitId ? photos.map((url: string) => ({ unit_id: unitId, public_url: url, storage_path: null })) : []
-          })
-        if (photoPayload.length) {
-          const { error: seedPhotoError } = await supabase.from('inventory_unit_photos').insert(photoPayload)
-          if (seedPhotoError) throw seedPhotoError
-        }
-      }
-
-      const { data: finalProjects, error: finalProjectError } = await supabase
-        .from('inventory_projects').select('*').order('created_at', { ascending: true })
       if (finalProjectError) throw finalProjectError
+
       const projectUi = (finalProjects || []).map((p: DbProject) => mapProject(p))
       const projectMap = new Map(projectUi.map((p) => [p.id, p]))
 
       const { data: unitRows, error: unitError } = await supabase
-        .from('inventory_units').select('*').order('created_at', { ascending: true })
+        .from('inventory_units')
+        .select('*')
+        .order('created_at', { ascending: true })
       if (unitError) throw unitError
 
       const { data: photoRows, error: photoError } = await supabase
-        .from('inventory_unit_photos').select('*').order('created_at', { ascending: true })
+        .from('inventory_unit_photos')
+        .select('*')
+        .order('created_at', { ascending: true })
       if (photoError) throw photoError
 
       const groupedPhotos: Record<string, DbUnitPhoto[]> = {}
-        ; ((photoRows || []) as DbUnitPhoto[]).forEach((row) => {
-          groupedPhotos[row.unit_id] = [...(groupedPhotos[row.unit_id] || []), row]
-        })
+      ;((photoRows || []) as DbUnitPhoto[]).forEach((row) => {
+        groupedPhotos[row.unit_id] = [...(groupedPhotos[row.unit_id] || []), row]
+      })
+
       setUnitPhotoRows(groupedPhotos)
       setDbProjects(projectUi)
-      setDbUnits(((unitRows || []) as DbUnit[]).map((u) => mapUnit(u, projectMap.get(u.project_id), groupedPhotos[u.id] || [])))
+      setDbUnits(
+        ((unitRows || []) as DbUnit[]).map((u) =>
+          mapUnit(u, projectMap.get(u.project_id), groupedPhotos[u.id] || [])
+        )
+      )
     } catch (err: any) {
       setError(err?.message || 'Could not load property inventory')
     } finally {
@@ -383,9 +302,6 @@ export default function Inventory({ role = 'agent', unitPhotos, setUnitPhotos }:
   const viewProject = viewUnit ? dbProjects.find((p) => p.id === viewUnit.projectId) : null
 
   const photoItemsForUnit = (unitId: string): PhotoItem[] => {
-    const unit = dbUnits.find((u) => u.id === unitId)
-    const basePhotos = (((mockUnits.find((mu: any) => String(mu.id) === String(unit?.legacyId)) as any)?.photos || []) as string[])
-      .map((src) => ({ src, source: 'base' as const }))
     const storedPhotos = (unitPhotoRows[unitId] || []).map((p) => ({
       src: p.public_url,
       photoId: p.id,
@@ -393,7 +309,7 @@ export default function Inventory({ role = 'agent', unitPhotos, setUnitPhotos }:
       source: 'stored' as const,
     }))
     const localPhotos = (unitPhotos[unitId] || []).map((src) => ({ src, source: 'local' as const }))
-    return [...basePhotos, ...storedPhotos, ...localPhotos]
+    return [...storedPhotos, ...localPhotos]
   }
 
   const uploadFile = async (bucket: string, folder: string, file: File) => {

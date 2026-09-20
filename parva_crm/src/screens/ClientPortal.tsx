@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react'
 import { ArrowLeft, Building2, Download, FileCheck2, MapPin, Phone, Mail } from 'lucide-react'
-import { units, projects } from '../data/mockData'
 import { useData } from '../contexts/DataContext'
+import { supabase } from '../lib/supabase'
+import type { Project, Unit } from '../types'
 import LogoMark from '../components/ui/LogoMark'
 
 function formatPrice(p: number) {
@@ -22,6 +24,52 @@ interface ClientPortalProps {
 
 export default function ClientPortal({ leadId, onBack, unitPhotos = {} }: ClientPortalProps) {
   const { leads } = useData()
+  const [projects, setProjects] = useState<Project[]>([])
+  const [units, setUnits] = useState<Unit[]>([])
+
+  useEffect(() => {
+    let active = true
+    async function loadInventory() {
+      try {
+        const [pRes, uRes] = await Promise.all([
+          supabase.from('inventory_projects').select('*'),
+          supabase.from('inventory_units').select('*')
+        ])
+        if (!active) return
+        if (pRes.data) {
+          setProjects(pRes.data.map((p) => ({
+            id: p.id,
+            name: p.name,
+            developer: p.developer,
+            location: p.location,
+            reraNumber: p.rera_number || '',
+            reraStatus: p.rera_status || 'Registered',
+            possessionDate: p.possession_date || '',
+            totalUnits: p.total_units || 0,
+          })))
+        }
+        if (uRes.data) {
+          setUnits(uRes.data.map((u) => ({
+            id: u.id,
+            projectId: u.project_id,
+            unitNumber: u.unit_number,
+            bhk: u.bhk || '',
+            floor: u.floor || '',
+            areaSqft: u.area_sqft || 0,
+            price: u.price || 0,
+            facing: u.facing || '',
+            status: u.status || 'Available',
+            photos: []
+          })))
+        }
+      } catch (err) {
+        console.error('Failed to load inventory for ClientPortal', err)
+      }
+    }
+    loadInventory()
+    return () => { active = false }
+  }, [])
+
   const lead = leads.find((l) => l.id === leadId) || leads[0]
   if (!lead) {
     return (
@@ -77,7 +125,7 @@ export default function ClientPortal({ leadId, onBack, unitPhotos = {} }: Client
           {shortlisted.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {shortlisted.map((u) => {
-                const project = projects.find((p) => p.id === u.projectId)!
+                const project = projects.find((p) => p.id === u.projectId)
                 const photos = [...(u.photos || []), ...(unitPhotos[u.id] || [])]
                 return (
                   <div key={u.id} className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
@@ -98,8 +146,8 @@ export default function ClientPortal({ leadId, onBack, unitPhotos = {} }: Client
                         <Building2 size={16} color="#1C2B4A" />
                       </div>
                       <div>
-                        <p className="text-sm font-semibold text-foreground">{project.name}</p>
-                        <p className="text-xs text-muted-foreground">{project.location}</p>
+                        <p className="text-sm font-semibold text-foreground">{project?.name || 'Property'}</p>
+                        <p className="text-xs text-muted-foreground">{project?.location || ''}</p>
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">

@@ -4,7 +4,6 @@ import { useData } from '../contexts/DataContext'
 import { supabase } from '../lib/supabase'
 import Modal from '../components/ui/Modal'
 import type { Role, CalendarEvent } from '../types'
-import { currentUserByRole } from './Messages'
 
 const HOURS = Array.from({ length: 13 }, (_, i) => i + 8) // 8am–8pm
 const TYPE_COLORS: Record<CalendarEvent['type'], string> = {
@@ -127,7 +126,7 @@ interface SharedCalendarProps {
 
 export default function SharedCalendar({ role, currentUserId: propUserId }: SharedCalendarProps) {
   const { employees } = useData()
-  const currentUserId = propUserId || currentUserByRole[role]
+  const currentUserId = propUserId || employees.find((e) => e.role === role)?.id || ''
   const allEmployees = useMemo(() => employees.filter((e) => e.status === 'active'), [employees])
   const employeeIds = useMemo(() => allEmployees.map((e) => e.id), [allEmployees])
 

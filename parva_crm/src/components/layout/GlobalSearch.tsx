@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Search, X, User, Target, Users, CalendarClock, Building2 } from 'lucide-react'
-import { siteVisits, projects, units } from '../../data/mockData'
+import { supabase } from '../../lib/supabase'
 import { useData } from '../../contexts/DataContext'
 import { StatusBadge } from '../ui/Badge'
 import type { Group } from '../../types'
@@ -15,18 +15,56 @@ interface GlobalSearchProps {
 export default function GlobalSearch({ open, onClose, onNavigate, groupList = [] }: GlobalSearchProps) {
   const { leads, employees } = useData()
   const [q, setQ] = useState('')
+  const [projects, setProjects] = useState<{ id: string; name: string; location: string }[]>([])
+  const [units, setUnits] = useState<{ id: string; unitNumber: string; bhk: string; projectId: string }[]>([])
+  const [siteVisits, setSiteVisits] = useState<{ id: string; leadName: string; projectName: string; date: string }[]>([])
 
   useEffect(() => {
-    if (!open) setQ('')
-  }, [open])
+    if (!open) {
+      setQ('')
+      return
+    }
+    let active = true
+    async function loadSearchData() {
+      try {
+        const [pRes, uRes, vRes] = await Promise.all([
+          supabase.from('inventory_projects').select('id, name, location'),
+          supabase.from('inventory_units').select('id, unit_number, bhk, project_id'),
+          supabase.from('site_visits').select('id, lead_id, location, date')
+        ])
+        if (!active) return
+        if (pRes.data) {
+          setProjects(pRes.data.map((p) => ({ id: p.id, name: p.name, location: p.location || '' })))
+        }
+        if (uRes.data) {
+          setUnits(uRes.data.map((u) => ({ id: u.id, unitNumber: u.unit_number, bhk: u.bhk || '', projectId: u.project_id })))
+        }
+        if (vRes.data) {
+          setSiteVisits(vRes.data.map((v) => {
+            const lead = leads.find((l) => l.id === v.lead_id)
+            return {
+              id: v.id,
+              leadName: lead?.name || 'Site Visit Lead',
+              projectName: v.location || 'Property',
+              date: v.date || ''
+            }
+          }))
+        }
+      } catch (err) {
+        console.error('Failed to load search data', err)
+      }
+    }
+    loadSearchData()
+    return () => { active = false }
+  }, [open, leads])
 
   const leadResults = useMemo(
     () => (q ? leads.filter((l) => l.name.toLowerCase().includes(q.toLowerCase()) || l.phone.includes(q)).slice(0, 5) : []),
-    [q]
+    [q, leads]
   )
   const peopleResults = useMemo(
     () => (q ? employees.filter((e) => e.name.toLowerCase().includes(q.toLowerCase())).slice(0, 5) : []),
-    [q]
+    [q, employees]
   )
   const groupResults = useMemo(
     () => (q ? groupList.filter((g) => g.name.toLowerCase().includes(q.toLowerCase())).slice(0, 5) : []),
@@ -34,14 +72,17 @@ export default function GlobalSearch({ open, onClose, onNavigate, groupList = []
   )
   const visitResults = useMemo(
     () => (q ? siteVisits.filter((v) => v.leadName.toLowerCase().includes(q.toLowerCase()) || v.projectName.toLowerCase().includes(q.toLowerCase())).slice(0, 5) : []),
-    [q]
+    [q, siteVisits]
   )
   const propertyResults = useMemo(() => {
     if (!q) return []
     const projectMatches = projects.filter((p) => p.name.toLowerCase().includes(q.toLowerCase()) || p.location.toLowerCase().includes(q.toLowerCase()))
     const unitMatches = units.filter((u) => u.unitNumber.toLowerCase().includes(q.toLowerCase()))
-    return [...projectMatches.map((p) => ({ label: p.name, sub: p.location })), ...unitMatches.map((u) => ({ label: u.unitNumber, sub: `${u.bhk} · ${projects.find((p) => p.id === u.projectId)?.name}` }))].slice(0, 5)
-  }, [q])
+    return [
+      ...projectMatches.map((p) => ({ label: p.name, sub: p.location })),
+      ...unitMatches.map((u) => ({ label: u.unitNumber, sub: `${u.bhk} · ${projects.find((p) => p.id === u.projectId)?.name || 'Property'}` }))
+    ].slice(0, 5)
+  }, [q, projects, units])
 
   const noResults = q && !leadResults.length && !peopleResults.length && !groupResults.length && !visitResults.length && !propertyResults.length
 

@@ -53,10 +53,6 @@ type UiGroupConversation = {
   unread: number
 }
 
-// Kept exported only for backward compatibility with any old import.
-// Authentication now supplies the real employee ID; no employee ID is hardcoded here.
-export const currentUserByRole: Record<Role, string> = {} as Record<Role, string>
-
 function initials(name: string) {
   return (name || '').split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
 }
