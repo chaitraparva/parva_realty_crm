@@ -1,4 +1,4 @@
-import { Users, TrendingUp, LayoutDashboard, GitBranch, PieChart, Flag, CreditCard, Network, FileText, Bell, Settings, LogOut, Target, X, MessageCircle, Building2, CalendarClock, ClipboardList, BarChart2, AlertCircle, Calendar, ClipboardCheck } from 'lucide-react'
+import { Users, TrendingUp, LayoutDashboard, GitBranch, PieChart, Flag, CreditCard, Network, FileText, Bell, Settings, LogOut, Target, X, MessageCircle, Building2, CalendarClock, ClipboardList, BarChart2, AlertCircle, Calendar, ClipboardCheck, CalendarDays } from 'lucide-react'
 import LogoMark from '../ui/LogoMark'
 import type { Role } from '../../types'
 
@@ -16,6 +16,7 @@ const navByRole: Record<Role, NavItem[]> = {
     { id: 'site-visits', label: 'Site Visits', icon: <CalendarClock size={18} />, section: 'Leads' },
     { id: 'inventory', label: 'Property Inventory', icon: <Building2 size={18} />, section: 'Leads' },
     { id: 'org-chart', label: 'Org & People', icon: <Network size={18} />, section: 'Organisation' },
+    { id: 'leave-management', label: 'Leave Management', icon: <CalendarDays size={18} />, section: 'Organisation' },
     { id: 'performance', label: 'My Performance', icon: <TrendingUp size={18} />, section: 'Analytics' },
   ],
   manager: [
@@ -29,6 +30,7 @@ const navByRole: Record<Role, NavItem[]> = {
     { id: 'site-visits', label: 'Site Visits', icon: <CalendarClock size={18} />, section: 'Operations' },
     { id: 'inventory', label: 'Property Inventory', icon: <Building2 size={18} />, section: 'Operations' },
     { id: 'org-chart', label: 'Org & People', icon: <Network size={18} />, section: 'Organisation' },
+    { id: 'leave-management', label: 'Leave Management', icon: <CalendarDays size={18} />, section: 'Organisation' },
     { id: 'flags', label: 'Flags & Warnings', icon: <Flag size={18} />, section: 'Compliance' },
   ],
   admin: [
@@ -38,6 +40,7 @@ const navByRole: Record<Role, NavItem[]> = {
     { id: 'approvals', label: 'Approvals', icon: <ClipboardCheck size={18} />, section: 'Overview' },
     { id: 'escalations', label: 'Escalations', icon: <AlertCircle size={18} />, section: 'Overview' },
     { id: 'org-chart', label: 'Org & People', icon: <Network size={18} />, section: 'People' },
+    { id: 'leave-management', label: 'Leave Management', icon: <CalendarDays size={18} />, section: 'Organisation' },
     { id: 'site-visits', label: 'Site Visits', icon: <CalendarClock size={18} />, section: 'Overview' },
     { id: 'inventory', label: 'Property Inventory', icon: <Building2 size={18} />, section: 'Overview' },
     { id: 'flags-admin', label: 'Flags & Warnings', icon: <Flag size={18} />, section: 'Compliance' },

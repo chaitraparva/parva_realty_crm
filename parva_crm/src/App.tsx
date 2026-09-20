@@ -66,6 +66,7 @@ import SharedCalendar from './screens/SharedCalendar'
 import Approvals from './screens/Approvals'
 import Notifications from './screens/Notifications'
 import Settings from './screens/Settings'
+import LeaveManagement from './screens/LeaveManagement'
 
 const defaultScreens: Record<
   Role,
@@ -101,6 +102,14 @@ export default function App() {
 
   const handleLogout =
     async () => {
+      try {
+        localStorage.removeItem('parva_crm_active_screen')
+        if (window.location.hash) {
+          window.history.replaceState(null, '', window.location.pathname + window.location.search)
+        }
+      } catch {
+        // ignore storage/history error
+      }
       await supabase.auth.signOut()
       setCurrentUser(null)
     }
@@ -148,13 +157,29 @@ function AuthenticatedApp({
     refresh,
   } = useData()
 
+  const getInitialScreen = (): string => {
+    if (typeof window !== 'undefined') {
+      const hashScreen = window.location.hash.replace(/^#\/?/, '').trim()
+      if (hashScreen) {
+        return hashScreen
+      }
+      try {
+        const savedScreen = localStorage.getItem('parva_crm_active_screen')
+        if (savedScreen) {
+          return savedScreen
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return defaultScreens[currentUser.role]
+  }
+
   const [
     screen,
     setScreen,
-  ] = useState(
-    defaultScreens[
-    currentUser.role
-    ]
+  ] = useState<string>(
+    getInitialScreen
   )
 
   const [
@@ -311,7 +336,41 @@ function AuthenticatedApp({
   ) => {
     setScreen(nextScreen)
     setParams(nextParams || {})
+    if (typeof window !== 'undefined') {
+      try {
+        if (window.location.hash.replace(/^#\/?/, '').trim() !== nextScreen) {
+          window.location.hash = nextScreen
+        }
+        localStorage.setItem('parva_crm_active_screen', nextScreen)
+      } catch {
+        // ignore storage/hash errors
+      }
+    }
   }
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        if (window.location.hash.replace(/^#\/?/, '').trim() !== screen) {
+          window.location.hash = screen
+        }
+        localStorage.setItem('parva_crm_active_screen', screen)
+      } catch {
+        // ignore
+      }
+    }
+  }, [screen])
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hashScreen = window.location.hash.replace(/^#\/?/, '').trim()
+      if (hashScreen && hashScreen !== screen) {
+        setScreen(hashScreen)
+      }
+    }
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [screen])
 
   /*
    * ============================================================
@@ -1173,6 +1232,16 @@ function AuthenticatedApp({
                   (value) =>
                     !value
                 )
+              }
+            />
+          )
+
+        case 'leave-management':
+          return (
+            <LeaveManagement
+              role={role}
+              currentUserId={
+                currentUser.id
               }
             />
           )

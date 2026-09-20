@@ -25,6 +25,7 @@ const screenTitles: Record<string, string> = {
   messages: 'Interact',
   notifications: 'Notifications',
   settings: 'Settings',
+  'leave-management': 'Leave Management',
 }
 
 interface TopBarProps {
