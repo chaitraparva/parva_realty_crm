@@ -269,6 +269,7 @@ export interface LeaveRequest {
   leaveType: LeaveType
   startDate: string
   endDate: string
+  days?: number
   reason?: string
   status: LeaveStatus
   reviewedBy?: string

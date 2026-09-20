@@ -49,6 +49,7 @@ function mapLeaveRow(
         leaveType: row.leave_type,
         startDate: row.start_date,
         endDate: row.end_date,
+        days: calculateLeaveDays(row.start_date, row.end_date),
         reason: row.reason || '',
         status: row.status,
         reviewedBy: row.reviewed_by || undefined,
@@ -148,16 +149,20 @@ export async function createLeaveRequest(
 ): Promise<LeaveRequest> {
     const employee = await getCurrentEmployee()
 
+    if (!input.leaveType) {
+        throw new Error('Leave type is required')
+    }
+
     if (!input.startDate || !input.endDate) {
-        throw new Error(
-            'Start date and end date are required'
-        )
+        throw new Error('Start date and end date are required')
     }
 
     if (input.endDate < input.startDate) {
-        throw new Error(
-            'End date cannot be before start date'
-        )
+        throw new Error('End date cannot be before start date')
+    }
+
+    if (!input.reason?.trim()) {
+        throw new Error('Reason is required')
     }
 
     const { data, error } = await supabase
@@ -167,7 +172,7 @@ export async function createLeaveRequest(
             leave_type: input.leaveType,
             start_date: input.startDate,
             end_date: input.endDate,
-            reason: input.reason?.trim() || null,
+            reason: input.reason.trim(),
             status: 'Pending',
         })
         .select(`
@@ -189,9 +194,7 @@ export async function createLeaveRequest(
     throwIfError(error)
 
     if (!data) {
-        throw new Error(
-            'Leave request was not created'
-        )
+        throw new Error('Leave request was not created')
     }
 
     return mapLeaveRow(
@@ -212,6 +215,19 @@ export async function reviewLeaveRequest(
     reviewerComment = ''
 ): Promise<LeaveRequest> {
     const employee = await getCurrentEmployee()
+
+    // Employees cannot review their own leave request
+    const { data: existing, error: checkError } = await supabase
+        .from('leave_requests')
+        .select('id, employee_id, status')
+        .eq('id', requestId)
+        .single()
+
+    throwIfError(checkError)
+
+    if (existing && existing.employee_id === employee.id) {
+        throw new Error('You cannot approve or reject your own leave request.')
+    }
 
     const { data, error } = await supabase
         .from('leave_requests')
