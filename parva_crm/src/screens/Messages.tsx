@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { Send, ArrowLeft, Search, Paperclip, FileText, X as XIcon, MessageCircle, Phone, Mail, PhoneMissed, PhoneOff, PhoneIncoming, Plus, Video, Users, Check } from 'lucide-react'
+import { Send, ArrowLeft, Search, Paperclip, FileText, X as XIcon, MessageCircle, Phone, Mail, PhoneMissed, PhoneOff, PhoneIncoming, Plus, Video, Users, Check, Trash2 } from 'lucide-react'
 import { useData } from '../contexts/DataContext'
 import { supabase } from '../lib/supabase'
 import CallModal from '../components/ui/CallModal'
@@ -10,6 +10,8 @@ import {
   createDirectConversation,
   createGroup,
   sendMessage as saveMessage,
+  deleteMessage,
+  deleteGroup,
   subscribeToChat,
   subscribeToMessages,
   getAllEmployees,
@@ -399,6 +401,10 @@ export default function Messages({
   const [showNewGroupModal, setShowNewGroupModal] = useState(false)
   const [newGroupName, setNewGroupName] = useState('')
   const [newGroupMembers, setNewGroupMembers] = useState<Set<string>>(new Set())
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null)
+  const [deletingMessageLoading, setDeletingMessageLoading] = useState(false)
+  const [showDeleteGroupConfirm, setShowDeleteGroupConfirm] = useState(false)
+  const [deletingGroupLoading, setDeletingGroupLoading] = useState(false)
 
   // Resolve authentic Supabase user -> employee record & load all active employees
   useEffect(() => {
@@ -635,23 +641,71 @@ export default function Messages({
 
     if (!activeConvoId) return
 
-    const unsubscribe = subscribeToMessages(activeConvoId, (incomingRow) => {
-      setChatState((prev) => {
-        // Prevent duplicate messages in realtime
-        if (prev.messages.some((m) => m.id === incomingRow.id)) {
-          return prev
-        }
-        return {
+    const unsubscribe = subscribeToMessages(
+      activeConvoId,
+      (incomingRow) => {
+        setChatState((prev) => {
+          // Prevent duplicate messages in realtime
+          if (prev.messages.some((m) => m.id === incomingRow.id)) {
+            return prev
+          }
+          return {
+            ...prev,
+            messages: [...prev.messages, incomingRow],
+          }
+        })
+      },
+      (deletedMessageId) => {
+        setChatState((prev) => ({
           ...prev,
-          messages: [...prev.messages, incomingRow],
-        }
-      })
-    })
+          messages: prev.messages.filter((m) => m.id !== deletedMessageId),
+        }))
+      }
+    )
 
     return () => {
       unsubscribe()
     }
   }, [selectedId, selectedGroupConvo?.group.id, chatState.conversations, chatState.members, activeEmployeeId])
+
+  const handleDeleteMessage = async () => {
+    if (!deletingMessageId || !activeEmployeeId) return
+    try {
+      setDeletingMessageLoading(true)
+      await deleteMessage(deletingMessageId, activeEmployeeId)
+      setChatState((prev) => ({
+        ...prev,
+        messages: prev.messages.filter((m) => m.id !== deletingMessageId),
+      }))
+      setDeletingMessageId(null)
+    } catch (err) {
+      console.error('Failed to delete message:', err)
+    } finally {
+      setDeletingMessageLoading(false)
+    }
+  }
+
+  const handleDeleteGroup = async () => {
+    if (!selectedGroupConvo) return
+    const groupId = selectedGroupConvo.group.id
+    try {
+      setDeletingGroupLoading(true)
+      await deleteGroup(groupId)
+      setShowGroupInfo(false)
+      setShowDeleteGroupConfirm(false)
+      setSelectedId(null)
+      setChatState((prev) => ({
+        ...prev,
+        groups: prev.groups.filter((g) => g.id !== groupId),
+        conversations: prev.conversations.filter((c) => c.id !== groupId),
+        messages: prev.messages.filter((m) => m.conversation_id !== groupId),
+      }))
+    } catch (err) {
+      console.error('Failed to delete group:', err)
+    } finally {
+      setDeletingGroupLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (initialContactId) {
@@ -1091,9 +1145,9 @@ export default function Messages({
                     const mine = m.senderId === activeEmployeeId
                     const sender = allEmployees.find((e) => e.id === m.senderId)
                     return (
-                      <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                      <div key={m.id} className={`group relative flex ${mine ? 'justify-end' : 'justify-start'}`}>
                         <div
-                          className="max-w-[75%] sm:max-w-[60%] px-4 py-2.5 rounded-2xl text-sm"
+                          className="relative max-w-[75%] sm:max-w-[60%] px-4 py-2.5 rounded-2xl text-sm"
                           style={{
                             backgroundColor: mine ? '#1C2B4A' : '#fff',
                             color: mine ? '#FAF8F5' : '#1C2B4A',
@@ -1114,7 +1168,18 @@ export default function Messages({
                             )
                           )}
                           {m.text && <p className="leading-relaxed">{m.text}</p>}
-                          <p className="text-[10px] mt-1 opacity-60">{formatTime(m.timestamp)}</p>
+                          <div className="flex items-center justify-between gap-3 mt-1">
+                            <p className="text-[10px] opacity-60">{formatTime(m.timestamp)}</p>
+                            {mine && (
+                              <button
+                                onClick={() => setDeletingMessageId(m.id)}
+                                className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-white/60 hover:text-red-400"
+                                title="Delete message"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     )
@@ -1322,9 +1387,9 @@ export default function Messages({
                   {selected.thread.map((m) => {
                     const mine = m.senderId === activeEmployeeId
                     return (
-                      <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                      <div key={m.id} className={`group relative flex ${mine ? 'justify-end' : 'justify-start'}`}>
                         <div
-                          className="max-w-[75%] sm:max-w-[60%] px-4 py-2.5 rounded-2xl text-sm"
+                          className="relative max-w-[75%] sm:max-w-[60%] px-4 py-2.5 rounded-2xl text-sm"
                           style={{
                             backgroundColor: mine ? '#1C2B4A' : '#fff',
                             color: mine ? '#FAF8F5' : '#1C2B4A',
@@ -1344,7 +1409,18 @@ export default function Messages({
                             )
                           )}
                           {m.text && <p className="leading-relaxed">{m.text}</p>}
-                          <p className="text-[10px] mt-1 opacity-60">{formatTime(m.timestamp)}</p>
+                          <div className="flex items-center justify-between gap-3 mt-1">
+                            <p className="text-[10px] opacity-60">{formatTime(m.timestamp)}</p>
+                            {mine && (
+                              <button
+                                onClick={() => setDeletingMessageId(m.id)}
+                                className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-white/60 hover:text-red-400"
+                                title="Delete message"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     )
@@ -1679,7 +1755,8 @@ export default function Messages({
                   const member = allEmployees.find((e) => e.id === id)
                   if (!member) return null
                   const isYou = id === activeEmployeeId
-                  const isCreator = id === selectedGroupConvo.group.createdBy
+                  const isMemberCreator = id === selectedGroupConvo.group.createdBy
+                  const isMemberChaitra = member.role === 'admin' || member.email === 'chaitra@parvarealty.ae'
                   return (
                     <div key={id} className="flex items-center gap-3 px-2 py-2 rounded-lg">
                       <div
@@ -1692,18 +1769,99 @@ export default function Messages({
                         <p className="text-sm font-medium text-foreground truncate">{member.name} {isYou && <span className="text-muted-foreground font-normal">(you)</span>}</p>
                         <p className="text-xs text-muted-foreground capitalize truncate">{member.role} · {member.team}</p>
                       </div>
-                      {isCreator && (
+                      {isMemberCreator ? (
                         <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: 'rgba(201,169,110,0.12)', color: '#C9A96E' }}>
                           Creator
                         </span>
-                      )}
+                      ) : isMemberChaitra ? (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: 'rgba(28,43,74,0.1)', color: '#1C2B4A' }}>
+                          Admin
+                        </span>
+                      ) : null}
                     </div>
                   )
                 })}
               </div>
             </div>
+
+            {(() => {
+              const isCurrentCreator = selectedGroupConvo.group.createdBy === activeEmployeeId
+              const myEmp = allEmployees.find((e) => e.id === activeEmployeeId)
+              const isChaitraAdmin = (myEmp?.role === 'admin' || myEmp?.email === 'chaitra@parvarealty.ae' || role === 'admin')
+              const isChaitraMember = isChaitraAdmin && selectedGroupConvo.group.memberIds.includes(activeEmployeeId)
+              const canDeleteThisGroup = isCurrentCreator || isChaitraMember
+
+              if (!canDeleteThisGroup) return null
+
+              return (
+                <div className="pt-3 border-t border-border">
+                  <button
+                    onClick={() => setShowDeleteGroupConfirm(true)}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
+                  >
+                    <Trash2 size={14} /> Delete Group
+                  </button>
+                </div>
+              )
+            })()}
           </div>
         )}
+      </Modal>
+
+      {/* Delete Message Confirmation Modal */}
+      <Modal
+        open={!!deletingMessageId}
+        onClose={() => setDeletingMessageId(null)}
+        title="Delete Message?"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Are you sure you want to delete this message? It will be removed for everyone in this conversation.
+          </p>
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => setDeletingMessageId(null)}
+              className="flex-1 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleDeleteMessage}
+              disabled={deletingMessageLoading}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white bg-red-600 hover:bg-red-700 transition-colors disabled:opacity-50"
+            >
+              {deletingMessageLoading ? 'Deleting…' : 'Delete for Everyone'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Delete Group Confirmation Modal */}
+      <Modal
+        open={showDeleteGroupConfirm}
+        onClose={() => setShowDeleteGroupConfirm(false)}
+        title="Delete Group?"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Are you sure you want to delete <span className="font-semibold text-foreground">"{selectedGroupConvo?.group.name}"</span>? All messages and conversation history in this group will be permanently deleted for all members.
+          </p>
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => setShowDeleteGroupConfirm(false)}
+              className="flex-1 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleDeleteGroup}
+              disabled={deletingGroupLoading}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white bg-red-600 hover:bg-red-700 transition-colors disabled:opacity-50"
+            >
+              {deletingGroupLoading ? 'Deleting…' : 'Delete Group'}
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   )

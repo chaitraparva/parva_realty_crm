@@ -399,12 +399,42 @@ export async function sendMessage(
 }
 
 /**
- * Subscribes to realtime INSERT events on public.messages for a specific conversation.
+ * Deletes a message owned by the current employee.
+ * Supabase RLS enforces that sender_id matches the authenticated employee's profile.
+ */
+export async function deleteMessage(messageId: string, senderId: string): Promise<void> {
+  const { error } = await supabase
+    .from('messages')
+    .delete()
+    .eq('id', messageId)
+    .eq('sender_id', senderId)
+
+  throwIfError(error)
+}
+
+/**
+ * Deletes a group conversation.
+ * Cascades to conversation_members and messages automatically.
+ * Supabase RLS enforces that only the group creator (or Chaitra if member) can delete.
+ */
+export async function deleteGroup(conversationId: string): Promise<void> {
+  const { error } = await supabase
+    .from('conversations')
+    .delete()
+    .eq('id', conversationId)
+    .eq('type', 'group')
+
+  throwIfError(error)
+}
+
+/**
+ * Subscribes to realtime INSERT and DELETE events on public.messages for a specific conversation.
  * Returns an unsubscribe cleanup function.
  */
 export function subscribeToMessages(
   conversationId: string,
-  onMessage: (message: ChatMessageRow) => void
+  onMessage: (message: ChatMessageRow) => void,
+  onDelete?: (messageId: string) => void
 ) {
   const channel = supabase
     .channel(`messages:${conversationId}`)
@@ -419,6 +449,19 @@ export function subscribeToMessages(
       (payload) => {
         if (payload.new) {
           onMessage(payload.new as ChatMessageRow)
+        }
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'messages',
+      },
+      (payload) => {
+        if (payload.old?.id && onDelete) {
+          onDelete(payload.old.id)
         }
       }
     )
