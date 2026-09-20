@@ -3,6 +3,7 @@ import { Search, Filter, Plus, Phone, Clock, ChevronRight, AlertTriangle, Flag a
 import { siteVisits } from '../../data/mockData'
 import { useData, mapLead } from '../../contexts/DataContext'
 import { leadsApi, ApiError } from '../../services/api'
+import { getCurrentEmployeeSettings } from '../../services/employeeSettings'
 import { StatusBadge, LeadScoreBadge } from '../../components/ui/Badge'
 import KPICard from '../../components/ui/KPICard'
 import Modal from '../../components/ui/Modal'
@@ -65,31 +66,158 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
   useEffect(() => { setPage(1) }, [search, sourceFilter, statusFilter, officeFilter, assigneeFilter])
   useEffect(() => { if (selected.size === 0) setSelectionMode(false) }, [selected])
 
-  const submitNewLead = () => {
+  const submitNewLead = async () => {
     if (!newLeadForm.name.trim() || !newLeadForm.phone.trim()) return
+
     setCreatingLead(true)
     setActionError('')
-    leadsApi.create({
-      name: newLeadForm.name.trim(),
-      phone: newLeadForm.phone.trim(),
-      email: newLeadForm.email.trim() || undefined,
-      source: newLeadForm.source,
-      status: FIRST_STAGE,
-      assignedTo: currentUserId || undefined,
-      budget: newLeadForm.budget.trim() || undefined,
-      propertyType: newLeadForm.propertyType,
-      location: newLeadForm.location.trim() || undefined,
-    })
-      .then((created) => {
-        // Reuse the same backend→frontend mapping DataContext uses, so the
-        // shape is guaranteed consistent (no unsafe cast).
-        setAgentLeads((prev) => [mapLead(created as Record<string, unknown>), ...prev])
-        onAddAudit?.('Lead Created', `${currentUserName} added a new lead: ${newLeadForm.name.trim()}`)
-        setShowNewLeadModal(false)
-        setNewLeadForm({ name: '', phone: '', email: '', source: 'Referral', budget: '', propertyType: 'Apartment', location: '' })
+
+    try {
+      const settings = await getCurrentEmployeeSettings()
+
+      /*
+       * Agent-created leads stay with the creating agent so their new lead
+       * does not disappear from an agent-scoped workspace.
+       *
+       * Manager/Admin-created leads can use the employee's saved
+       * auto-assignment settings.
+       */
+      let assignedTo: string | undefined
+
+      if (role === 'agent') {
+        assignedTo = currentUserId || undefined
+      } else if (settings.autoAssign) {
+        const currentEmployee = employees.find(
+          (employee) => employee.id === currentUserId
+        )
+
+        const eligibleAgents = employees
+          .filter(
+            (employee) =>
+              employee.role === 'agent' &&
+              employee.status === 'active' &&
+              (role === 'admin' ||
+                !currentEmployee?.office ||
+                employee.office === currentEmployee.office)
+          )
+          .sort((a, b) => a.name.localeCompare(b.name))
+
+        if (eligibleAgents.length > 0) {
+          if (settings.roundRobin) {
+            /*
+             * Find the most recently assigned eligible agent, then choose
+             * the next agent in the stable alphabetical rotation.
+             */
+            let lastAssignedAgentId: string | null = null
+            let latestCreatedAt = ''
+
+            for (const lead of agentLeads) {
+              if (
+                lead.assignedTo &&
+                eligibleAgents.some(
+                  (employee) => employee.id === lead.assignedTo
+                )
+              ) {
+                const createdAt = lead.createdAt || ''
+
+                if (createdAt >= latestCreatedAt) {
+                  latestCreatedAt = createdAt
+                  lastAssignedAgentId = lead.assignedTo
+                }
+              }
+            }
+
+            if (lastAssignedAgentId) {
+              const lastIndex = eligibleAgents.findIndex(
+                (employee) => employee.id === lastAssignedAgentId
+              )
+
+              assignedTo =
+                eligibleAgents[
+                  (lastIndex + 1) % eligibleAgents.length
+                ]?.id
+            } else {
+              assignedTo = eligibleAgents[0]?.id
+            }
+          } else {
+            /*
+             * Auto-assign is enabled but round-robin is disabled:
+             * choose the active agent currently carrying the fewest leads.
+             */
+            const selectedAgent = eligibleAgents.reduce(
+              (best, candidate) => {
+                if (!best) return candidate
+
+                const bestCount = agentLeads.filter(
+                  (lead) =>
+                    lead.assignedTo === best.id &&
+                    lead.status !== 'Cancelled'
+                ).length
+
+                const candidateCount = agentLeads.filter(
+                  (lead) =>
+                    lead.assignedTo === candidate.id &&
+                    lead.status !== 'Cancelled'
+                ).length
+
+                return candidateCount < bestCount ? candidate : best
+              },
+              eligibleAgents[0]
+            )
+
+            assignedTo = selectedAgent?.id
+          }
+        }
+      }
+
+      const created = await leadsApi.create({
+        name: newLeadForm.name.trim(),
+        phone: newLeadForm.phone.trim(),
+        email: newLeadForm.email.trim() || undefined,
+        source: newLeadForm.source,
+        status: FIRST_STAGE,
+        assignedTo,
+        budget: newLeadForm.budget.trim() || undefined,
+        propertyType: newLeadForm.propertyType,
+        location: newLeadForm.location.trim() || undefined,
       })
-      .catch((err) => setActionError(err instanceof ApiError ? err.message : 'Could not create this lead — please retry.'))
-      .finally(() => setCreatingLead(false))
+
+      setAgentLeads((prev) => [
+        mapLead(created as Record<string, unknown>),
+        ...prev,
+      ])
+
+      const createdLeadName = newLeadForm.name.trim()
+
+      onAddAudit?.(
+        'Lead Created',
+        assignedTo
+          ? `${currentUserName} added "${createdLeadName}" and it was automatically assigned.`
+          : `${currentUserName} added "${createdLeadName}" with no automatic assignment.`
+      )
+
+      setShowNewLeadModal(false)
+
+      setNewLeadForm({
+        name: '',
+        phone: '',
+        email: '',
+        source: 'Referral',
+        budget: '',
+        propertyType: 'Apartment',
+        location: '',
+      })
+    } catch (err) {
+      setActionError(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Could not create this lead — please retry.'
+      )
+    } finally {
+      setCreatingLead(false)
+    }
   }
 
   const dupePhones = findDuplicatePhones(agentLeads)
