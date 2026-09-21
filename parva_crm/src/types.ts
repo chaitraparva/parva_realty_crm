@@ -342,7 +342,10 @@ export interface AuditEntry {
 
 export interface CalendarEvent {
   id: string
+  /** Employee the event is assigned to (displayed in their column). */
   ownerId: string
+  /** Employee who created the event — may differ from ownerId. */
+  createdBy?: string
   title: string
   start: string
   end: string
