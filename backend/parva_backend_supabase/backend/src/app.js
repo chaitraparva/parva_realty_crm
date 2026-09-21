@@ -11,6 +11,7 @@ const authRoutes = require('./routes/auth')
 const employeeRoutes = require('./routes/employees')
 const leadRoutes = require('./routes/leads')
 const approvalRoutes = require('./routes/approvals')
+const livekitRoutes = require('./routes/livekit')
 const errorHandler = require('./middleware/errorHandler')
 
 const app = express()
@@ -50,6 +51,7 @@ app.use('/api/auth', authRoutes)
 app.use('/api/users', employeeRoutes)
 app.use('/api/leads', leadRoutes)
 app.use('/api/approvals', approvalRoutes)
+app.use('/api/livekit', livekitRoutes)
 
 // 404
 app.use((_, res) => res.status(404).json({ message: 'Route not found' }))
