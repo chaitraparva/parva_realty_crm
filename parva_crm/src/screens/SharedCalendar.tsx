@@ -5,6 +5,8 @@ import { supabase } from '../lib/supabase'
 import Modal from '../components/ui/Modal'
 import type { Role, CalendarEvent } from '../types'
 
+type EmployeeStub = { id: string; name: string }
+
 const HOURS = Array.from({ length: 13 }, (_, i) => i + 8) // 8am–8pm
 const TYPE_COLORS: Record<CalendarEvent['type'], string> = {
   call: '#2563EB',
@@ -125,9 +127,13 @@ interface SharedCalendarProps {
 }
 
 export default function SharedCalendar({ role, currentUserId: propUserId }: SharedCalendarProps) {
-  const { employees } = useData()
-  const currentUserId = propUserId || employees.find((e) => e.role === role)?.id || ''
-  const allEmployees = useMemo(() => employees.filter((e) => e.status === 'active'), [employees])
+  // useData().employees is role-filtered by the backend (manager sees own office,
+  // agent sees only self). We keep it only for the "Currently In Session" name
+  // lookup. The calendar grid fetches ALL active employees directly from Supabase.
+  const { employees: contextEmployees } = useData()
+  const currentUserId = propUserId || contextEmployees.find((e) => e.role === role)?.id || ''
+
+  const [allEmployees, setAllEmployees] = useState<EmployeeStub[]>([])
   const employeeIds = useMemo(() => allEmployees.map((e) => e.id), [allEmployees])
 
   const [events, setEvents] = useState<CalendarEvent[]>([])
@@ -155,6 +161,17 @@ export default function SharedCalendar({ role, currentUserId: propUserId }: Shar
     isPublic: true,
   })
 
+  const loadAllEmployees = async () => {
+    const { data, error: empError } = await supabase
+      .from('employees')
+      .select('id, name')
+      .eq('status', 'active')
+      .order('name')
+    if (!empError && data) {
+      setAllEmployees(data as EmployeeStub[])
+    }
+  }
+
   const loadEvents = async () => {
     setError('')
     const { data, error: loadError } = await supabase
@@ -172,6 +189,11 @@ export default function SharedCalendar({ role, currentUserId: propUserId }: Shar
     setEvents(rows.map((row) => toUiEvent(row, currentUserId, employeeIds)))
     setLoading(false)
   }
+
+  useEffect(() => {
+    void loadAllEmployees()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     loadEvents()
@@ -312,7 +334,9 @@ export default function SharedCalendar({ role, currentUserId: propUserId }: Shar
             <p className="text-sm font-semibold text-red-700 mb-1">Currently In Session</p>
             <div className="flex flex-wrap gap-2">
               {activeBusy.map((ev) => {
-                const owner = employees.find((e) => e.id === ev.ownerId)
+                // Use contextEmployees for name lookup (fine — just a display label)
+                const owner = contextEmployees.find((e) => e.id === ev.ownerId)
+                  ?? allEmployees.find((e) => e.id === ev.ownerId)
                 return (
                   <span key={ev.id} className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium" style={{ backgroundColor: TYPE_COLORS[ev.type] + '20', color: TYPE_COLORS[ev.type] }}>
                     🔴 {owner?.name || 'Team member'} — {ev.title}
