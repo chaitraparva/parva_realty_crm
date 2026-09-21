@@ -31,8 +31,7 @@ const TYPE_LABELS: Record<CalendarEvent['type'], string> = {
 // Shape returned by the calendar_events Supabase query
 type CalendarRow = {
   id: string
-  created_by: string       // UUID of the employee who CREATED the event
-  assigned_to: string | null  // UUID of the employee the event is FOR (new column)
+  created_by: string       // UUID of the employee who created and owns the event
   title: string
   description: string | null
   start_at: string
@@ -108,19 +107,15 @@ function currentDateKey() {
  * Maps a raw DB row to the CalendarEvent UI type.
  *
  * Key mapping:
- *   ownerId   = assigned_to ?? created_by
- *               (event appears in the assigned employee's column;
- *                existing events where assigned_to IS NULL keep their
- *                current position under created_by — zero regression)
- *   createdBy = created_by
- *               (used for delete permission: only creator or admin can delete)
+ *   ownerId   = row.created_by (event belongs to creator and appears in their column)
+ *   createdBy = row.created_by (used for edit/delete permissions)
  *
  * isPublic:
  *   true  → event is visible to everyone in the grid
- *   false → only visible to the creator or the assigned employee
+ *   false → only visible to the creator
  */
 function toUiEvent(row: CalendarRow): CalendarEvent {
-  const ownerId = row.assigned_to ?? row.created_by
+  const ownerId = row.created_by
 
   let type: CalendarEvent['type'] = 'meeting'
   try {
@@ -210,7 +205,7 @@ export default function SharedCalendar({ role, currentUserId: propUserId }: Shar
     const { data, error: loadError } = await supabase
       .from('calendar_events')
       .select(
-        'id, created_by, assigned_to, title, description, start_at, end_at, all_day, location, lead_id, attendees, created_at, updated_at'
+        'id, created_by, title, description, start_at, end_at, all_day, location, lead_id, attendees, created_at, updated_at'
       )
       .order('start_at', { ascending: true })
 
@@ -324,8 +319,7 @@ export default function SharedCalendar({ role, currentUserId: propUserId }: Shar
     const attendees = employeeIds.length > 0 ? employeeIds : [currentUserId]
 
     const { error: insertError } = await supabase.from('calendar_events').insert({
-      created_by: currentUserId,   // person who created the event
-      assigned_to: currentUserId,  // strictly self: employee can only create for themselves
+      created_by: currentUserId,   // person who created and owns the event
       title: form.title.trim(),
       description: JSON.stringify({ type: form.type, category: form.category }),
       start_at: startIso,
