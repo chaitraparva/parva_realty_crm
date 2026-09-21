@@ -1,9 +1,15 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { Send, ArrowLeft, Search, Paperclip, FileText, X as XIcon, MessageCircle, Phone, Mail, PhoneMissed, PhoneOff, PhoneIncoming, Plus, Video, Users, Check, Trash2, Edit2, LogOut, UserPlus } from 'lucide-react'
 import { useData } from '../contexts/DataContext'
 import { supabase } from '../lib/supabase'
-import CallModal from '../components/ui/CallModal'
+import LiveKitCallWindow from '../components/calls/LiveKitCallWindow'
+import IncomingCall from '../components/calls/IncomingCall'
 import Modal from '../components/ui/Modal'
+import {
+  subscribeToCallSignals,
+  broadcastCallSignal,
+  type CallSignalPayload,
+} from '../services/livekitCallService'
 import type { Role, CallLog, InternalEmail } from '../types'
 import {
   loadChatState,
@@ -397,6 +403,10 @@ export default function Messages({
   const [activeCallWith, setActiveCallWith] = useState<string | null>(null)
   const [activeCallType, setActiveCallType] = useState<'voice' | 'video'>('voice')
   const [activeCallGroupId, setActiveCallGroupId] = useState<string | null>(null)
+  const [activeRoomName, setActiveRoomName] = useState<string | null>(null)
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
+  const [activeCallId, setActiveCallId] = useState<string | null>(null)
+  const [incomingSignal, setIncomingSignal] = useState<CallSignalPayload | null>(null)
   const [showGroupInfo, setShowGroupInfo] = useState(false)
   const [openEmailId, setOpenEmailId] = useState<string | null>(null)
   const [showCompose, setShowCompose] = useState(false)
@@ -418,6 +428,48 @@ export default function Messages({
   const [addingMembersLoading, setAddingMembersLoading] = useState(false)
   const [showLeaveGroupConfirm, setShowLeaveGroupConfirm] = useState(false)
   const [leavingGroupLoading, setLeavingGroupLoading] = useState(false)
+
+  // Subscribe to incoming call signals
+  useEffect(() => {
+    if (!activeEmployeeId) return
+    // Derive the set of group/conversation UUIDs this employee belongs to.
+    // Used by subscribeToCallSignals to filter group call signals so that only
+    // members of the relevant group see the incoming call popup.
+    const myGroupIds = chatState.groups
+      .filter((g) => g.memberIds.includes(activeEmployeeId))
+      .map((g) => g.id)
+
+    const unsub = subscribeToCallSignals(activeEmployeeId, myGroupIds, (event, payload) => {
+      if (event === 'call:ring') {
+        // Only show if not already in a call
+        setIncomingSignal((prev) => prev ?? payload)
+      } else if (event === 'call:cancel' || event === 'call:end') {
+        // Caller cancelled or call ended while we were ringing
+        setIncomingSignal((prev) =>
+          prev && prev.callId === payload.callId ? null : prev
+        )
+        // Also end active call if we're in one
+        if (event === 'call:end') {
+          setActiveCallWith(null)
+          setActiveCallGroupId(null)
+          setActiveRoomName(null)
+          setActiveConversationId(null)
+          setActiveCallId(null)
+        }
+      } else if (event === 'call:decline') {
+        // Callee declined — cancel the outgoing call on caller side
+        if (payload.callId === activeCallId) {
+          setActiveCallWith(null)
+          setActiveCallGroupId(null)
+          setActiveRoomName(null)
+          setActiveConversationId(null)
+          setActiveCallId(null)
+        }
+      }
+    })
+    return unsub
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeEmployeeId, activeCallId, chatState.groups])
 
   // Resolve authentic Supabase user -> employee record & load all active employees
   useEffect(() => {
@@ -978,54 +1030,158 @@ export default function Messages({
     e.target.value = ''
   }
 
-  const endCall = async (durationSec: number) => {
-    try {
-      if (activeCallGroupId) {
-        const group = chatState.groups.find((g) => g.id === activeCallGroupId)
-        const participantIds = group?.memberIds || [activeEmployeeId]
+  const endCall = useCallback(async (durationSec: number) => {
+    // Broadcast end signal to the other party
+    if (activeCallId) {
+      const contactId = activeCallGroupId || activeCallWith
+      void broadcastCallSignal('call:end', {
+        callId: activeCallId,
+        callerId: activeEmployeeId,
+        callerName: allEmployees.find((e) => e.id === activeEmployeeId)?.name || '',
+        calleeId: contactId || '',
+        isGroup: !!activeCallGroupId,
+        conversationId: activeConversationId || '',
+        callType: activeCallType,
+      }).catch(() => {})
+    }
 
+    // Clear active call state immediately
+    const wasGroupId = activeCallGroupId
+    const wasCallWith = activeCallWith
+    const wasCallType = activeCallType
+    setActiveCallWith(null)
+    setActiveCallGroupId(null)
+    setActiveRoomName(null)
+    setActiveConversationId(null)
+    setActiveCallId(null)
+
+    // Persist call log
+    try {
+      if (wasGroupId) {
+        const group = chatState.groups.find((g) => g.id === wasGroupId)
+        const participantIds = group?.memberIds || [activeEmployeeId]
         const saved = await insertPersistentCallLog({
           employeeId: activeEmployeeId,
           contactEmployeeId: null,
           durationSeconds: durationSec,
-          callType: activeCallType,
-          groupId: activeCallGroupId,
+          callType: wasCallType,
+          groupId: wasGroupId,
           participantIds,
         })
-
         setCallLogs((prev) => [saved, ...prev.filter((c) => c.id !== saved.id)])
-        setActiveCallGroupId(null)
         return
       }
 
-      if (!activeCallWith) return
-
+      if (!wasCallWith) return
       const saved = await insertPersistentCallLog({
         employeeId: activeEmployeeId,
-        contactEmployeeId: activeCallWith,
+        contactEmployeeId: wasCallWith,
         durationSeconds: durationSec,
-        callType: activeCallType,
+        callType: wasCallType,
       })
-
       setCallLogs((prev) => [saved, ...prev.filter((c) => c.id !== saved.id)])
-      setActiveCallWith(null)
     } catch (error) {
       console.error('Could not save call log:', error)
-      setChatError(error instanceof Error ? error.message : 'Could not save call history.')
-      setActiveCallGroupId(null)
-      setActiveCallWith(null)
     }
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCallId, activeCallGroupId, activeCallWith, activeCallType, activeConversationId, activeEmployeeId, chatState.groups, allEmployees])
 
-  const startCall = (contactId: string, type: 'voice' | 'video') => {
+  const startCall = useCallback(async (contactId: string, type: 'voice' | 'video') => {
+    const callId = crypto.randomUUID()
+    const callerName = allEmployees.find((e) => e.id === activeEmployeeId)?.name || ''
+
+    // Get or create the direct conversation — its ID is the authorization key
+    let conversationId: string
+    try {
+      conversationId = await createDirectConversation(activeEmployeeId, contactId)
+    } catch (err) {
+      console.error('[LiveKit] Could not create/find direct conversation:', err)
+      return
+    }
+
     setActiveCallType(type)
     setActiveCallWith(contactId)
-  }
+    setActiveConversationId(conversationId)
+    setActiveCallId(callId)
 
-  const startGroupCall = (groupId: string, type: 'voice' | 'video') => {
+    void broadcastCallSignal('call:ring', {
+      callId,
+      callerId: activeEmployeeId,
+      callerName,
+      calleeId: contactId,
+      isGroup: false,
+      callType: type,
+      conversationId,
+    }).catch((err) => console.warn('[LiveKit] ring signal failed:', err))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeEmployeeId, allEmployees, chatState.conversations, chatState.members])
+
+  const startGroupCall = useCallback((groupId: string, type: 'voice' | 'video') => {
+    const callId = crypto.randomUUID()
+    // For groups, the groupId IS the conversation UUID (same table)
+    const conversationId = groupId
+    const group = chatState.groups.find((g) => g.id === groupId)
+    const callerName = allEmployees.find((e) => e.id === activeEmployeeId)?.name || ''
+
     setActiveCallType(type)
     setActiveCallGroupId(groupId)
-  }
+    setActiveConversationId(conversationId)
+    setActiveCallId(callId)
+
+    void broadcastCallSignal('call:ring', {
+      callId,
+      callerId: activeEmployeeId,
+      callerName,
+      calleeId: groupId,
+      isGroup: true,
+      groupName: group?.name,
+      callType: type,
+      conversationId,
+    }).catch((err) => console.warn('[LiveKit] group ring signal failed:', err))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeEmployeeId, allEmployees, chatState.groups])
+
+  const acceptCall = useCallback(() => {
+    if (!incomingSignal) return
+    const sig = incomingSignal
+    setIncomingSignal(null)
+    setActiveCallType(sig.callType)
+    setActiveConversationId(sig.conversationId)
+    setActiveCallId(sig.callId)
+    if (sig.isGroup) {
+      setActiveCallGroupId(sig.calleeId)
+      setActiveCallWith(null)
+    } else {
+      setActiveCallWith(sig.callerId)
+      setActiveCallGroupId(null)
+    }
+    void broadcastCallSignal('call:accept', {
+      callId: sig.callId,
+      callerId: sig.callerId,
+      callerName: sig.callerName,
+      calleeId: sig.calleeId,
+      isGroup: sig.isGroup,
+      conversationId: sig.conversationId,
+      callType: sig.callType,
+    }).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incomingSignal])
+
+  const declineCall = useCallback(() => {
+    if (!incomingSignal) return
+    const sig = incomingSignal
+    setIncomingSignal(null)
+    void broadcastCallSignal('call:decline', {
+      callId: sig.callId,
+      callerId: sig.callerId,
+      callerName: sig.callerName,
+      calleeId: sig.calleeId,
+      isGroup: sig.isGroup,
+      conversationId: sig.conversationId,
+      callType: sig.callType,
+    }).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incomingSignal])
 
   const handleEmailFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -1711,9 +1867,9 @@ export default function Messages({
         )}
       </div>
 
-      {(activeCallWith || activeCallGroupId) && (
-        <CallModal
-          open={!!(activeCallWith || activeCallGroupId)}
+      {(activeCallWith || activeCallGroupId) && activeConversationId && (
+        <LiveKitCallWindow
+          conversationId={activeConversationId}
           callType={activeCallType}
           contactName={allEmployees.find((e) => e.id === activeCallWith)?.name || ''}
           contactInitials={initials(allEmployees.find((e) => e.id === activeCallWith)?.name || '')}
@@ -1729,6 +1885,14 @@ export default function Messages({
               : undefined
           }
           onEnd={endCall}
+        />
+      )}
+
+      {incomingSignal && !activeCallWith && !activeCallGroupId && (
+        <IncomingCall
+          signal={incomingSignal}
+          onAccept={acceptCall}
+          onDecline={declineCall}
         />
       )}
 
