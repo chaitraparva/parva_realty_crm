@@ -22,18 +22,16 @@ function toPublic(e) {
   }
 }
 
-// GET /api/users — admin sees all, manager sees their office, agent sees self
+// GET /api/users — all authenticated employees see the full employee directory.
+// Role-based scoping was removed: it caused managers/agents to receive only a
+// partial employee list, breaking Team Members, OrgChart, lead assignment pickers,
+// and every other screen that requires the complete directory.
 exports.list = async (req, res) => {
-  let query = supabaseAdmin.from('employees').select(SELECT).order('name')
+  const { data, error } = await supabaseAdmin
+    .from('employees')
+    .select(SELECT)
+    .order('name')
 
-  if (req.user.role === 'manager') {
-    query = query.eq('office_id', req.user.officeId)
-  } else if (req.user.role === 'agent') {
-    query = query.eq('id', req.user.id)
-  }
-  // admin: no filter — sees everyone
-
-  const { data, error } = await query
   if (error) return res.status(500).json({ message: error.message })
   res.json((data || []).map(toPublic))
 }
