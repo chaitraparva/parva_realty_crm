@@ -67,6 +67,12 @@ export default function Login({ onLogin }: LoginProps) {
   const [step, setStep] = useState<'login' | 'set-password' | 'forgot' | 'reset-sent'>('login')
   const [checkingSession, setCheckingSession] = useState(true)
   const loginStartedRef = useRef(false)
+  // Store the session tokens received from the PASSWORD_RECOVERY / SIGNED_IN
+  // auth event so we can re-assert the session before calling updateUser.
+  // This prevents "Auth session missing!" if the in-memory session is cleared
+  // between the auth event and the button click (e.g. by autoRefreshToken
+  // attempting a refresh that the invite token does not support).
+  const inviteSessionRef = useRef<{ access_token: string; refresh_token: string } | null>(null)
 
   // Set-password state — used for BOTH first-time invite links and
   // forgot-password recovery links. Supabase delivers both as the same
@@ -113,37 +119,49 @@ export default function Login({ onLogin }: LoginProps) {
   useEffect(() => {
     let active = true
 
-    // Detect both Supabase auth flows for password recovery:
-    //  Implicit flow → #access_token=...&type=recovery in the URL hash
-    //  PKCE flow     → ?code=XXXX in the query string (Supabase default email template)
-    // In both cases we MUST keep the spinner alive until onAuthStateChange fires
-    // PASSWORD_RECOVERY. Calling getSession() first returns null before the PKCE code
-    // exchange completes, which would incorrectly show the login page.
+    // Detect ALL Supabase auth link variants that should show the set-password
+    // screen instead of attempting an immediate login:
+    //
+    //  Implicit invite  → #access_token=...&type=invite   (Supabase Dashboard "Invite user")
+    //  Implicit recovery→ #access_token=...&type=recovery (password-reset email)
+    //  PKCE recovery    → ?code=XXXX in the query string  (Supabase default PKCE email template)
+    //
+    // IMPORTANT: We must NOT call getSession() / completeLogin() for invite or
+    // recovery links. If completeLogin() fails (e.g. network blip) it calls
+    // supabase.auth.signOut() which wipes the session — then updateUser() later
+    // throws "Auth session missing!". Keep the spinner alive until
+    // onAuthStateChange fires PASSWORD_RECOVERY or SIGNED_IN.
     const hash = window.location.hash
     const search = window.location.search
-    const isRecoveryLink =
+    const isInviteOrRecoveryLink =
+      hash.includes('type=invite') ||
       hash.includes('type=recovery') ||
-      (hash.includes('access_token') && hash.includes('recovery')) ||
+      (hash.includes('access_token') && (hash.includes('invite') || hash.includes('recovery'))) ||
       search.includes('code=')
 
-    if (isRecoveryLink) {
+    if (isInviteOrRecoveryLink) {
       // Keep checkingSession=true — onAuthStateChange will clear it.
-      // Safety timeout: if Supabase never fires the event, stop spinning after 10s.
+      // Safety timeout: if Supabase never fires the event, stop spinning after 15s.
       const timeout = setTimeout(() => {
         if (active) setCheckingSession(false)
-      }, 10000)
+      }, 15000)
 
       const { data: sub } = supabase.auth.onAuthStateChange(
         (event: AuthChangeEvent, session: Session | null) => {
           if (!active) return
-          if (event === 'PASSWORD_RECOVERY' && session) {
-            clearTimeout(timeout)
-            setPendingLabel(session.user.email || 'there')
-            setStep('set-password')
-            setCheckingSession(false)
-          } else if (event === 'SIGNED_IN' && session && search.includes('code=')) {
-            // PKCE: some Supabase versions fire SIGNED_IN instead of PASSWORD_RECOVERY
-            // when the recovery code is exchanged. Treat it as a recovery flow.
+
+          if (
+            (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN') &&
+            session
+          ) {
+            // Store the session tokens in a ref so handleSetPassword can
+            // re-assert the session before calling updateUser(), preventing
+            // "Auth session missing!" if the in-memory session gets cleared
+            // between this event and the button click.
+            inviteSessionRef.current = {
+              access_token: session.access_token,
+              refresh_token: session.refresh_token,
+            }
             clearTimeout(timeout)
             setPendingLabel(session.user.email || 'there')
             setStep('set-password')
@@ -159,7 +177,7 @@ export default function Login({ onLogin }: LoginProps) {
       }
     }
 
-    // Normal flow — no recovery hash or code in URL
+    // Normal flow — no invite/recovery hash or PKCE code in URL.
     supabase.auth.getSession().then(({ data }) => {
       if (!active || loginStartedRef.current) return
 
@@ -177,6 +195,10 @@ export default function Login({ onLogin }: LoginProps) {
     const { data: sub } = supabase.auth.onAuthStateChange(
       (event: AuthChangeEvent, session: Session | null) => {
         if (event === 'PASSWORD_RECOVERY' && session) {
+          inviteSessionRef.current = {
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+          }
           setPendingLabel(session.user.email || 'there')
           setStep('set-password')
           setCheckingSession(false)
@@ -256,6 +278,41 @@ export default function Login({ onLogin }: LoginProps) {
 
     setSettingPassword(true)
     try {
+      // Re-assert the invite/recovery session before calling updateUser().
+      //
+      // Why: supabase-js stores the session after exchanging the invite/recovery
+      // token, but autoRefreshToken may attempt a token refresh in the background.
+      // If that refresh fails (invite tokens are single-use; the refresh_token may
+      // not be renewable before a password is set), supabase-js clears the
+      // in-memory session and fires SIGNED_OUT — leaving getSession() returning
+      // null by the time the user clicks the button, which causes updateUser()
+      // to throw "Auth session missing!".
+      //
+      // Calling setSession() with the tokens captured at the PASSWORD_RECOVERY /
+      // SIGNED_IN event re-hydrates the in-memory session so updateUser() works.
+      if (inviteSessionRef.current) {
+        const { error: sessionErr } = await supabase.auth.setSession({
+          access_token: inviteSessionRef.current.access_token,
+          refresh_token: inviteSessionRef.current.refresh_token,
+        })
+        if (sessionErr) {
+          // setSession failed — the token may have truly expired (link older
+          // than the configured expiry). Surface a clear message.
+          throw new Error(
+            'Your invitation link has expired. Please ask an admin to send a new invite.'
+          )
+        }
+      } else {
+        // Fallback: no stored tokens — try getSession() in case the session
+        // is still valid in localStorage.
+        const { data: sessionData } = await supabase.auth.getSession()
+        if (!sessionData.session) {
+          throw new Error(
+            'Your session is no longer active. Please open the original invitation link again, or ask an admin to resend.'
+          )
+        }
+      }
+
       // Sets the real Supabase Auth password for this account. No password
       // is ever stored anywhere by this app itself.
       const { error: updateErr } = await supabase.auth.updateUser({ password: newPass })
