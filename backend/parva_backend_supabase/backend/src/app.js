@@ -22,16 +22,30 @@ app.use(helmet())
 // CORS — allow only the configured frontend origin(s). No wildcard in
 // production. FRONTEND_URL may be a single origin or a comma-separated list
 // (e.g. your production domain + a Vercel preview-deployment URL).
-const allowedOrigins = [
-  ...(process.env.FRONTEND_URL || '').split(',').map((o) => o.trim()).filter(Boolean),
-  'http://localhost:5173',
-  'http://localhost:3000',
-]
+const envOrigins = (process.env.FRONTEND_URL || '')
+  .split(',')
+  .map((o) => o.trim().replace(/\/+$/, ''))
+  .filter(Boolean)
+
+const allowedOrigins = Array.from(
+  new Set([
+    'https://crm.parvarealty.ae',
+    ...envOrigins,
+    'http://localhost:5173',
+    'http://localhost:3000',
+  ])
+)
+
 app.use(
   cors({
     origin: (origin, cb) => {
-      if (!origin || allowedOrigins.includes(origin)) return cb(null, true)
-      cb(new Error('Not allowed by CORS'))
+      // Allow requests with no origin (like mobile apps, curl, or server-to-server calls)
+      if (!origin) return cb(null, true)
+      const normalizedOrigin = origin.replace(/\/+$/, '')
+      if (allowedOrigins.includes(normalizedOrigin)) {
+        return cb(null, true)
+      }
+      cb(null, false)
     },
     credentials: true,
   })
