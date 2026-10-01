@@ -8,7 +8,7 @@ import Modal from '../../components/ui/Modal'
 import SignaturePad from '../../components/ui/SignaturePad'
 import { getLeadScore, findDuplicatePhones } from '../../utils/leadScore'
 import { PIPELINE_STAGES, FINAL_STAGE, FIRST_STAGE } from '../../utils/pipeline'
-import { rankCandidates, getCapacityPct, getWorkloadStatus } from '../../utils/aiAssignment'
+import { rankCandidates, getCapacityPct } from '../../utils/aiAssignment'
 import type { LeadStatus, ActivityType, Notification, EscalationRequest } from '../../types'
 
 const statuses: LeadStatus[] = PIPELINE_STAGES
@@ -68,6 +68,7 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
 
   const [showTransferModal, setShowTransferModal] = useState(false)
   const [transferTo, setTransferTo] = useState('')
+  const [submittingTransfer, setSubmittingTransfer] = useState(false)
   const [showEscalateModal, setShowEscalateModal] = useState(false)
   const [escalateReason, setEscalateReason] = useState('')
   const [escalated, setEscalated] = useState(false)
@@ -108,7 +109,9 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
     return () => { active = false }
   }, [])
 
-  const dubaiAgents = employees.filter((e) => e.office === 'Dubai' && e.role === 'agent' && e.status === 'active')
+  const dubaiAgents = employees.filter(
+    (e) => e.office === 'Dubai' && e.status === 'active' && e.role !== 'admin'
+  )
   const dubaiRanked = rankCandidates(dubaiAgents, { office: 'Dubai' })
 
   const lead = { ...baseLead, status, activities, followUpDate, cancellationReason }
@@ -154,33 +157,70 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
     setShowLogModal(false)
   }
 
-  const submitTransfer = () => {
-    if (!transferTo) return
+  const submitTransfer = async () => {
+    if (!transferTo || submittingTransfer) return
     const agent = employees.find((e) => e.id === transferTo)
-    const transferActivity = {
-      id: `act-${Date.now()}`,
-      type: 'transfer' as ActivityType,
-      description: `Lead transferred to Dubai team — ${agent?.name} (${agent?.email}). Bangalore stage completed: Property Finalization.`,
-      timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
-      by: currentUserName,
-    }
-    setActivities((prev) => [...prev, transferActivity])
-    setStatus('Dubai Paperwork Overview')
-    patchSharedLead({ status: 'Dubai Paperwork Overview', assignedTo: transferTo, activities: [...activities, transferActivity] })
-    onAddNotification?.({
-      type: 'lead-transfer',
-      title: 'Lead Transferred to Dubai',
-      message: `${lead.name} transferred to ${agent?.name} (Dubai) for Dubai Paperwork Overview stage.`,
-      priority: 'high',
-    })
-    onAddAudit?.('Lead Transfer — Bangalore → Dubai', `Lead "${lead.name}" transferred to ${agent?.name} in Dubai`, 'Bangalore / Property Finalization', `Dubai / ${agent?.name}`)
+    const transferDescription = `Lead transferred to Dubai team — ${agent?.name || 'Dubai Team'} (${agent?.email || ''}). Bangalore stage completed: Property Finalization.`
+
+    setSubmittingTransfer(true)
     setActionError('')
-    leadsApi.update(lead.id, { status: 'Dubai Paperwork Overview', transferredFrom: currentUserId })
-      .then(() => leadsApi.assign(lead.id, transferTo))
-      .then(() => leadsApi.addActivity(lead.id, { type: 'transfer', description: transferActivity.description }))
-      .catch((err) => reportError(err, 'Transfer could not be saved — please retry.'))
-    setShowTransferModal(false)
-    setTransferTo('')
+
+    try {
+      // 1. Update status to 'Dubai Paperwork Overview' and record transferredFrom
+      await leadsApi.update(lead.id, {
+        status: 'Dubai Paperwork Overview',
+        transferredFrom: currentUserId,
+      })
+
+      // 2. Assign lead to the selected Dubai employee
+      await leadsApi.assign(lead.id, transferTo)
+
+      // 3. Add activity log
+      await leadsApi.addActivity(lead.id, {
+        type: 'transfer',
+        description: transferDescription,
+      })
+
+      // 4. Persistence confirmed success -> now update local state
+      const transferActivity = {
+        id: `act-${Date.now()}`,
+        type: 'transfer' as ActivityType,
+        description: transferDescription,
+        timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
+        by: currentUserName,
+      }
+
+      const updatedActivities = [...activities, transferActivity]
+      setActivities(updatedActivities)
+      setStatus('Dubai Paperwork Overview')
+      patchSharedLead({
+        status: 'Dubai Paperwork Overview',
+        assignedTo: transferTo,
+        transferredFrom: currentUserId,
+        activities: updatedActivities,
+      })
+
+      onAddNotification?.({
+        type: 'lead-transfer',
+        title: 'Lead Transferred to Dubai',
+        message: `${lead.name} transferred to ${agent?.name || 'Dubai Team'} (Dubai) for Dubai Paperwork Overview stage.`,
+        priority: 'high',
+      })
+
+      onAddAudit?.(
+        'Lead Transfer — Bangalore → Dubai',
+        `Lead "${lead.name}" transferred to ${agent?.name || 'Dubai Team'} in Dubai`,
+        'Bangalore / Property Finalization',
+        `Dubai / ${agent?.name || 'Dubai Team'}`
+      )
+
+      setShowTransferModal(false)
+      setTransferTo('')
+    } catch (err) {
+      reportError(err, 'Transfer could not be saved — please retry.')
+    } finally {
+      setSubmittingTransfer(false)
+    }
   }
 
   const submitEscalate = () => {
@@ -586,27 +626,15 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
                   </p>
                 </div>
               </div>
-              <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">AI Recommendation — Dubai Agent</p>
-              <div className="space-y-2 mb-4">
-                {dubaiRanked.slice(0, 3).map((r, i) => (
-                  <label key={r.employee.id} className="flex items-center gap-3 p-2.5 rounded-lg border cursor-pointer transition-colors" style={{ borderColor: transferTo === r.employee.id ? '#2563EB' : '#E5DFD5', backgroundColor: transferTo === r.employee.id ? 'rgba(37,99,235,0.05)' : undefined }}>
-                    <input type="radio" name="transferToInline" value={r.employee.id} checked={transferTo === r.employee.id} onChange={(e) => setTransferTo(e.target.value)} className="accent-blue-600" />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        {i === 0 && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ backgroundColor: '#2563EB', color: '#fff' }}>Recommended</span>}
-                        <p className="text-sm font-medium text-foreground">{r.employee.name}</p>
-                      </div>
-                      <p className="text-xs text-muted-foreground">{r.employee.team} · {r.employee.leadsAssigned}/{r.employee.capacityLimit} leads</p>
-                    </div>
-                    <WorkloadBadge status={r.status} pct={getCapacityPct(r.employee)} />
-                  </label>
-                ))}
-              </div>
               <button
-                onClick={submitTransfer}
-                disabled={!transferTo}
-                className="w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-opacity"
-                style={{ backgroundColor: '#2563EB', color: '#fff', opacity: transferTo ? 1 : 0.5 }}
+                onClick={() => {
+                  if (!transferTo && dubaiRanked.length > 0) {
+                    setTransferTo(dubaiRanked[0].employee.id)
+                  }
+                  setShowTransferModal(true)
+                }}
+                className="w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-opacity shadow-sm hover:opacity-95"
+                style={{ backgroundColor: '#2563EB', color: '#fff' }}
               >
                 <Plane size={14} /> Confirm Transfer to Dubai
               </button>
@@ -795,7 +823,7 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
         </div>
       </Modal>
 
-      <Modal open={showTransferModal} onClose={() => setShowTransferModal(false)} title="Transfer Lead to Dubai">
+      <Modal open={showTransferModal} onClose={() => !submittingTransfer && setShowTransferModal(false)} title="Transfer Lead to Dubai">
         <div className="space-y-4">
           <div className="p-3 rounded-xl flex items-start gap-2.5" style={{ backgroundColor: 'rgba(37,99,235,0.08)' }}>
             <Plane size={15} className="text-blue-600 mt-0.5 shrink-0" />
@@ -805,32 +833,59 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1.5">Recommended Dubai Agent (by AI workload analysis)</label>
+            <label className="block text-xs font-medium text-muted-foreground mb-1.5">Recommended Dubai Agent</label>
             <div className="space-y-2 mb-3">
-              {dubaiRanked.map((r) => (
-                <div key={r.employee.id} className="flex items-center gap-3 p-2.5 rounded-lg border border-border">
-                  <input type="radio" name="transferTo" value={r.employee.id} checked={transferTo === r.employee.id} onChange={(e) => setTransferTo(e.target.value)} />
+              {dubaiRanked.map((r, i) => (
+                <label
+                  key={r.employee.id}
+                  className="flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors"
+                  style={{
+                    borderColor: transferTo === r.employee.id ? '#2563EB' : '#E5DFD5',
+                    backgroundColor: transferTo === r.employee.id ? 'rgba(37,99,235,0.05)' : undefined,
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="transferToModal"
+                    value={r.employee.id}
+                    checked={transferTo === r.employee.id}
+                    onChange={(e) => setTransferTo(e.target.value)}
+                    className="accent-blue-600"
+                  />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground">{r.employee.name}</p>
-                    <p className="text-xs text-muted-foreground">{r.employee.team} · {r.employee.leadsAssigned}/{r.employee.capacityLimit} leads</p>
+                    <div className="flex items-center gap-2">
+                      {i === 0 && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ backgroundColor: '#2563EB', color: '#fff' }}>
+                          Recommended
+                        </span>
+                      )}
+                      <p className="text-sm font-medium text-foreground">{r.employee.name}</p>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{r.employee.office} · {r.employee.leadsAssigned ?? 0}/{r.employee.capacityLimit ?? 35} leads</p>
                   </div>
                   <WorkloadBadge status={r.status} pct={getCapacityPct(r.employee)} />
-                  <span className="text-xs text-muted-foreground">AI score: {r.score.toFixed(0)}</span>
-                </div>
+                </label>
               ))}
+              {dubaiRanked.length === 0 && (
+                <p className="text-xs text-muted-foreground p-3 text-center">No active Dubai sales employees found.</p>
+              )}
             </div>
           </div>
           <div className="flex gap-3 pt-2">
-            <button onClick={() => setShowTransferModal(false)} className="flex-1 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+            <button
+              onClick={() => setShowTransferModal(false)}
+              disabled={submittingTransfer}
+              className="flex-1 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
               Cancel
             </button>
             <button
-              onClick={submitTransfer}
-              disabled={!transferTo}
+              onClick={() => void submitTransfer()}
+              disabled={!transferTo || submittingTransfer}
               className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-opacity flex items-center justify-center gap-1.5"
-              style={{ backgroundColor: '#2563EB', color: '#fff', opacity: transferTo ? 1 : 0.5 }}
+              style={{ backgroundColor: '#2563EB', color: '#fff', opacity: transferTo && !submittingTransfer ? 1 : 0.5 }}
             >
-              <Plane size={14} /> Confirm Transfer
+              <Plane size={14} /> {submittingTransfer ? 'Transferring…' : 'Confirm Transfer'}
             </button>
           </div>
         </div>

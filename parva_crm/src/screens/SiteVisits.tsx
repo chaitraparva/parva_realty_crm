@@ -185,7 +185,6 @@ export default function SiteVisits({
     projectId: '',
     date: '',
     time: '',
-    agentId: '',
     managerId: '',
   })
 
@@ -410,18 +409,14 @@ export default function SiteVisits({
           : undefined,
 
       agentId:
-        !isPending &&
-          assignedEmployee?.role ===
-          'agent'
+        !isPending
           ? row.employee_id ||
           undefined
           : undefined,
 
       agentName:
-        !isPending &&
-          assignedEmployee?.role ===
-          'agent'
-          ? assignedEmployee.name
+        !isPending
+          ? assignedEmployee?.name
           : undefined,
 
       date:
@@ -617,13 +612,15 @@ export default function SiteVisits({
           (v) =>
             v.assignedManagerId ===
               currentUserId ||
-              v.agentId
+            v.agentId ===
+              currentUserId ||
+            (v.agentId
               ? resolvedTeamAgents.some(
                 (a) =>
                   a.id ===
                   v.agentId
               )
-              : false
+              : false)
         )
         : visits
 
@@ -776,31 +773,12 @@ export default function SiteVisits({
       }
 
       /*
-       * MANAGER:
-       * employee_id = agent
-       */
-      else if (
-        role === 'manager'
-      ) {
-        if (
-          !form.agentId
-        ) {
-          setSaving(false)
-          return
-        }
-
-        employeeId =
-          form.agentId
-      }
-
-      /*
-       * AGENT:
-       * employee_id = lead's assigned agent
+       * ALL NON-ADMIN EMPLOYEES (Managers and Agents):
+       * Self-scheduling: employee_id = authenticated employee ID
+       * status = 'Scheduled'
        */
       else {
-        employeeId =
-          lead.assignedTo ||
-          currentUserId
+        employeeId = currentUserId
       }
 
       const {
@@ -899,28 +877,6 @@ export default function SiteVisits({
           forUserId:
             form.managerId,
         })
-      } else if (
-        role === 'manager'
-      ) {
-        const agent =
-          employees.find(
-            (e) =>
-              e.id ===
-              form.agentId
-          )
-
-        onAddNotification?.({
-          type:
-            'site-visit',
-          title:
-            'Site Visit Scheduled',
-          message:
-            `${agent?.name || 'Agent'} assigned to ${lead.name} — ${project.name} on ${form.date} at ${form.time}`,
-          priority:
-            'low',
-          forUserId:
-            form.agentId,
-        })
       } else {
         onAddNotification?.({
           type:
@@ -941,7 +897,6 @@ export default function SiteVisits({
         projectId: '',
         date: '',
         time: '',
-        agentId: '',
         managerId: '',
       })
 
@@ -1814,52 +1769,23 @@ export default function SiteVisits({
               </div>
             )}
 
-          {/* MANAGER -> AGENT */}
+          {/* NON-ADMIN -> ASSIGNED TO CURRENT EMPLOYEE (READ-ONLY) */}
 
-          {role ===
-            'manager' && (
+          {role !==
+            'admin' && (
               <div>
 
                 <label className="block text-xs font-medium text-muted-foreground mb-1.5">
-                  Assign to Agent
+                  Assigned To
                 </label>
 
-                <select
-                  value={
-                    form.agentId
-                  }
-                  disabled={
-                    saving
-                  }
-                  onChange={(
-                    e
-                  ) =>
-                    setForm({
-                      ...form,
-                      agentId:
-                        e.target
-                          .value,
-                    })
-                  }
-                  className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none"
-                >
-
-                  <option value="">
-                    Select an agent
-                  </option>
-
-                  {resolvedTeamAgents.map(
-                    (a) => (
-                      <option
-                        key={a.id}
-                        value={a.id}
-                      >
-                        {a.name}
-                      </option>
-                    )
-                  )}
-
-                </select>
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  value={`${currentEmployee?.name || 'Current Employee'} — Me`}
+                  className="w-full px-3 py-2.5 rounded-lg border border-border bg-muted/40 text-sm text-foreground cursor-not-allowed"
+                />
 
               </div>
             )}
@@ -1894,10 +1820,7 @@ export default function SiteVisits({
                 !form.time ||
                 (role ===
                   'admin' &&
-                  !form.managerId) ||
-                (role ===
-                  'manager' &&
-                  !form.agentId)
+                  !form.managerId)
               }
               className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-opacity flex items-center justify-center gap-2"
               style={{
@@ -1913,10 +1836,7 @@ export default function SiteVisits({
                     !form.time ||
                     (role ===
                       'admin' &&
-                      !form.managerId) ||
-                    (role ===
-                      'manager' &&
-                      !form.agentId)
+                      !form.managerId)
                     ? 0.5
                     : 1,
               }}
