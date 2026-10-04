@@ -54,8 +54,9 @@ app.use(
 app.use(express.json({ limit: '10mb' }))
 
 // Basic rate limiting — tighter on auth endpoints to slow brute-force attempts.
-app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false }))
-app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false }))
+// Whole office usually shares ONE public IP, so limits are per-IP but generous.
+app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, max: 3000, standardHeaders: true, legacyHeaders: false }))
+app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false }))
 
 // Health check
 app.get('/api/health', (_, res) => res.json({ status: 'ok', time: new Date() }))
