@@ -129,6 +129,15 @@ export default function ProfileModal({ open, onClose, role, name, email, avatarU
           <div>
             <p className="text-sm font-semibold text-foreground">{fullName}</p>
             <p className="text-xs text-muted-foreground">Click the camera icon to upload a profile picture</p>
+            {photo && (
+              <button
+                type="button"
+                onClick={() => { setPhoto(null); setPhotoChanged(true) }}
+                className="mt-1.5 text-xs font-semibold text-red-600 hover:underline"
+              >
+                Remove photo
+              </button>
+            )}
           </div>
         </div>
 

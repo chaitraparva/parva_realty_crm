@@ -3107,6 +3107,17 @@ export default function Messages({
             </div>
           </div>
 
+          {selectedGroupConvo?.group.avatarUrl && (
+            <button
+              type="button"
+              onClick={() => void handleSaveGroupAvatar(null)}
+              disabled={savingGroupAvatar}
+              className="w-full py-2.5 rounded-lg border border-red-200 bg-red-50 text-sm font-medium text-red-600 hover:bg-red-100 transition-colors"
+            >
+              Remove current icon
+            </button>
+          )}
+
           <div className="flex gap-3 pt-2">
             <button
               onClick={() => setShowAvatarPickerModal(false)}
