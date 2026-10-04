@@ -552,9 +552,9 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
     <div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-5 mb-6">
         <KPICard title="Total Leads" value={stats.total} sub={role === 'agent' ? 'Assigned to you' : role === 'manager' ? "Your office's pipeline" : 'Across the company'} accent />
-        <KPICard title="New" value={stats.new} sub="First contact needed" trend={{ value: '2', up: true }} />
+        <KPICard title="New" value={stats.new} sub="First contact needed" />
         <KPICard title="Site Visits" value={stats.siteVisit} sub="Scheduled" />
-        <KPICard title="Closed" value={stats.closed} sub="This month" trend={{ value: '1', up: true }} />
+        <KPICard title="Closed" value={stats.closed} sub="This month" />
       </div>
 
       {actionError && (

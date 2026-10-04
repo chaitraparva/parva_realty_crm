@@ -222,6 +222,7 @@ export interface Employee {
   responseTime: string
   capacityLimit: number
   employeeId?: string
+  avatarUrl?: string
 }
 
 export interface PayrollRecord {

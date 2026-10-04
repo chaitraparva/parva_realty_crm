@@ -1,7 +1,9 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Camera, Upload, Check, FileText, X as XIcon } from 'lucide-react'
 import Modal from '../ui/Modal'
 import type { Role } from '../../types'
+import { authApi } from '../../services/api'
+import { compressImageToDataUrl } from '../ui/Avatar'
 
 interface ProfileModalProps {
   open: boolean
@@ -9,6 +11,8 @@ interface ProfileModalProps {
   role: Role
   name: string
   email: string
+  avatarUrl?: string | null
+  onAvatarSaved?: (url: string | null) => void
 }
 
 const requiredDocs = [
@@ -18,8 +22,19 @@ const requiredDocs = [
   'Previous Offer Letter / Resume',
 ]
 
-export default function ProfileModal({ open, onClose, role, name, email }: ProfileModalProps) {
-  const [photo, setPhoto] = useState<string | null>(null)
+export default function ProfileModal({ open, onClose, role, name, email, avatarUrl = null, onAvatarSaved }: ProfileModalProps) {
+  const [photo, setPhoto] = useState<string | null>(avatarUrl)
+  const [photoChanged, setPhotoChanged] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (open) {
+      setPhoto(avatarUrl)
+      setPhotoChanged(false)
+      setSaveError('')
+    }
+  }, [open, avatarUrl])
   const [fullName, setFullName] = useState(name)
   const [emailValue, setEmailValue] = useState(email)
   const [phone, setPhone] = useState('')
@@ -34,9 +49,13 @@ export default function ProfileModal({ open, onClose, role, name, email }: Profi
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => setPhoto(reader.result as string)
-    reader.readAsDataURL(file)
+    compressImageToDataUrl(file)
+      .then((dataUrl) => {
+        setPhoto(dataUrl)
+        setPhotoChanged(true)
+      })
+      .catch(() => setSaveError('Could not use that image. Please pick a different photo.'))
+    e.target.value = ''
   }
 
   const openDocPicker = (doc: string) => {
@@ -60,7 +79,21 @@ export default function ProfileModal({ open, onClose, role, name, email }: Profi
     })
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    setSaveError('')
+    if (photoChanged) {
+      try {
+        setSaving(true)
+        await authApi.updateAvatar(photo)
+        onAvatarSaved?.(photo)
+        setPhotoChanged(false)
+      } catch (err) {
+        setSaveError(err instanceof Error ? err.message : 'Could not save your photo')
+        setSaving(false)
+        return
+      }
+      setSaving(false)
+    }
     setSaved(true)
     setTimeout(() => {
       setSaved(false)
@@ -185,11 +218,14 @@ export default function ProfileModal({ open, onClose, role, name, email }: Profi
           </div>
         </div>
 
+        {saveError && <p className="text-xs text-red-600">{saveError}</p>}
+
         <div className="flex justify-end gap-3 pt-2">
           <button onClick={onClose} className="px-5 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
             Cancel
           </button>
           <button
+            disabled={saving}
             onClick={handleSave}
             className="px-6 py-2.5 rounded-xl text-sm font-semibold transition-all"
             style={{ backgroundColor: saved ? '#10B981' : '#1C2B4A', color: '#FAF8F5' }}

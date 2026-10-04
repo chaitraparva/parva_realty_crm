@@ -115,6 +115,7 @@ interface TopBarProps {
   onMarkAllRead?: () => void
   onNavigate: (screen: string, params?: Record<string, string>) => void
   onOpenProfile?: () => void
+  avatarUrl?: string | null
   onMenuClick?: () => void
   onSearchClick?: () => void
   darkMode?: boolean
@@ -136,6 +137,7 @@ export default function TopBar({
   darkMode = false,
   onToggleDarkMode,
   currentUserName = '',
+  avatarUrl = null,
 }: TopBarProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -394,8 +396,8 @@ export default function TopBar({
           onClick={onOpenProfile}
           className="flex items-center gap-2.5 cursor-pointer group"
         >
-          <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-xs font-semibold text-primary-foreground">
-            {initials}
+          <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-xs font-semibold text-primary-foreground overflow-hidden">
+            {avatarUrl ? <img src={avatarUrl} alt={currentUserName} className="w-full h-full object-cover" /> : initials}
           </div>
           <div className="hidden sm:block">
             <p className="text-sm font-medium text-foreground leading-none">

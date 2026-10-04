@@ -61,6 +61,7 @@ type DbEmployee = {
   role: string
   department: string | null
   designation: string | null
+  avatar_url?: string | null
   status: string
   manager_id: string | null
   office_id: string | null
@@ -107,6 +108,7 @@ function mapDbEmployee(row: DbEmployee): OrgEmployee {
           ? ('Bangalore' as Employee['office'])
           : (officeName as Employee['office']),
     team: row.department || 'Sales',
+    avatarUrl: row.avatar_url || undefined,
     managerId: row.manager_id ?? undefined,
 
     // These fields are not stored in employees.
@@ -197,10 +199,7 @@ function EmployeeCard({
           color: colors.text,
         }}
       >
-        {emp.name
-          .split(' ')
-          .map((n) => n[0])
-          .join('')}
+        {emp.avatarUrl ? <img src={emp.avatarUrl} alt={emp.name} className="w-full h-full rounded-full object-cover" /> : emp.name.split(' ').map((n) => n[0]).join('')}
       </div>
 
       <p
@@ -286,10 +285,7 @@ export default function OrgChart({
       setLoadingEmployees(true)
       setEmployeeError('')
 
-      const {
-        data,
-        error,
-      } = await supabase
+      const buildQuery = (withAvatar: boolean) => supabase
         .from('employees')
         .select(`
           id,
@@ -300,6 +296,7 @@ export default function OrgChart({
           role,
           department,
           designation,
+          ${withAvatar ? 'avatar_url,' : ''}
           status,
           manager_id,
           office_id,
@@ -312,6 +309,15 @@ export default function OrgChart({
         .order('name', {
           ascending: true,
         })
+
+      let { data, error } = await buildQuery(true)
+      if (error) {
+        // avatar_url column not created yet (profile_avatar.sql not run) —
+        // still show the org chart, just without photos.
+        const retry = await buildQuery(false)
+        data = retry.data as typeof data
+        error = retry.error
+      }
 
       if (!active) return
 
@@ -326,7 +332,7 @@ export default function OrgChart({
       }
 
       const mapped =
-        ((data || []) as DbEmployee[]).map(
+        ((data || []) as unknown as DbEmployee[]).map(
           mapDbEmployee
         )
 
@@ -812,13 +818,7 @@ export default function OrgChart({
                                     `1px solid ${colors.border}`,
                                 }}
                               >
-                                {emp.name
-                                  .split(' ')
-                                  .map(
-                                    (n) =>
-                                      n[0]
-                                  )
-                                  .join('')}
+                                {emp.avatarUrl ? <img src={emp.avatarUrl} alt={emp.name} className="w-full h-full rounded-full object-cover" /> : emp.name.split(' ').map((n) => n[0]).join('')}
                               </div>
 
                               <div>
@@ -961,10 +961,7 @@ export default function OrgChart({
                     ].text,
                 }}
               >
-                {selected.name
-                  .split(' ')
-                  .map((n) => n[0])
-                  .join('')}
+                {selected.avatarUrl ? <img src={selected.avatarUrl} alt={selected.name} className="w-full h-full rounded-full object-cover" /> : selected.name.split(' ').map((n) => n[0]).join('')}
               </div>
 
               <div>
@@ -1248,13 +1245,7 @@ export default function OrgChart({
                                 ].text,
                             }}
                           >
-                            {r.name
-                              .split(' ')
-                              .map(
-                                (n) =>
-                                  n[0]
-                              )
-                              .join('')}
+                            {r.avatarUrl ? <img src={r.avatarUrl} alt={r.name} className="w-full h-full rounded-full object-cover" /> : r.name.split(' ').map((n) => n[0]).join('')}
                           </span>
 
                           <span className="text-xs font-medium text-foreground">

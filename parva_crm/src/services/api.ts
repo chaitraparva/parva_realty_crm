@@ -76,6 +76,9 @@ export const authApi = {
 
   me: () => request<Record<string, unknown>>('GET', '/auth/me'),
 
+  updateAvatar: (avatarUrl: string | null) =>
+    request<{ avatarUrl: string | null }>('PATCH', '/auth/avatar', { avatarUrl }),
+
   changePassword: (newPassword: string) =>
     request('PATCH', '/auth/change-password', { newPassword }),
 }

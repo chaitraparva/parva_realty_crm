@@ -43,6 +43,26 @@ exports.login = async (req, res) => {
 // GET /api/auth/me
 exports.me = (req, res) => res.json(req.user)
 
+// PATCH /api/auth/avatar  — a user can only change their OWN profile photo.
+// Body: { avatarUrl: 'data:image/...' | null }
+exports.updateAvatar = async (req, res) => {
+  const { avatarUrl } = req.body
+  if (avatarUrl !== null && avatarUrl !== undefined) {
+    if (typeof avatarUrl !== 'string' || !/^data:image\/(png|jpe?g|webp);base64,/.test(avatarUrl)) {
+      return res.status(400).json({ message: 'Invalid image' })
+    }
+    if (avatarUrl.length > 400000) {
+      return res.status(413).json({ message: 'Image too large' })
+    }
+  }
+  const { error } = await supabaseAdmin
+    .from('employees')
+    .update({ avatar_url: avatarUrl || null })
+    .eq('id', req.user.id)
+  if (error) return res.status(500).json({ message: error.message })
+  res.json({ avatarUrl: avatarUrl || null })
+}
+
 // PATCH /api/auth/change-password
 exports.changePassword = async (req, res) => {
   const { newPassword } = req.body
@@ -68,5 +88,6 @@ function toPublicEmployee(e) {
     department: e.department,
     designation: e.designation,
     status: e.status,
+    avatarUrl: e.avatar_url || null,
   }
 }

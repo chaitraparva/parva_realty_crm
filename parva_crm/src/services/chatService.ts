@@ -15,6 +15,8 @@ export interface ChatConversationRow {
   id: string
   type: 'direct' | 'group' | string
   name: string | null
+  description?: string | null
+  avatar_url?: string | null
   created_by: string
   created_at: string
 }
@@ -29,6 +31,8 @@ export interface ChatMemberRow {
 export interface ChatGroup {
   id: string
   name: string
+  description?: string
+  avatarUrl?: string
   memberIds: string[]
   createdBy: string
   createdAt: string
@@ -47,11 +51,21 @@ export interface ChatEmployee {
   team?: string
 }
 
+export interface ChatMessageReaction {
+  id?: string
+  conversation_id: string
+  message_id: string
+  employee_id: string
+  emoji: string
+  created_at?: string
+}
+
 export interface ChatState {
   messages: ChatMessageRow[]
   conversations: ChatConversationRow[]
   members: ChatMemberRow[]
   groups: ChatGroup[]
+  reactions: Record<string, ChatMessageReaction[]>
 }
 
 function throwIfError(error: { message?: string } | null) {
@@ -357,18 +371,30 @@ export async function loadChatState(employeeId: string): Promise<ChatState> {
 
   const conversationIds = [...new Set((myMemberships ?? []).map((m) => m.conversation_id))]
   if (conversationIds.length === 0) {
-    return { messages: [], conversations: [], members: [], groups: [] }
+    return { messages: [], conversations: [], members: [], groups: [], reactions: {} }
   }
 
   const [
-    { data: conversations, error: conversationError },
+    conversationsResult,
     membersResult,
     { data: messages, error: messagesError },
+    reactionsResult,
   ] = await Promise.all([
-    supabase
-      .from('conversations')
-      .select('id, type, name, created_by, created_at')
-      .in('id', conversationIds),
+    (async () => {
+      const first = await supabase
+        .from('conversations')
+        .select('id, type, name, description, avatar_url, created_by, created_at')
+        .in('id', conversationIds)
+
+      if (first.error) {
+        // Fall back to original columns if description/avatar_url do not exist yet
+        return supabase
+          .from('conversations')
+          .select('id, type, name, created_by, created_at')
+          .in('id', conversationIds)
+      }
+      return first
+    })(),
     (async () => {
       const first = await supabase
         .from('conversation_members')
@@ -388,17 +414,32 @@ export async function loadChatState(employeeId: string): Promise<ChatState> {
       .select('id, conversation_id, sender_id, body, created_at, attachment_name, attachment_url')
       .in('conversation_id', conversationIds)
       .order('created_at', { ascending: true }),
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('message_reactions')
+          .select('id, conversation_id, message_id, employee_id, emoji, created_at')
+          .in('conversation_id', conversationIds)
+        if (error) return []
+        return (data || []) as ChatMessageReaction[]
+      } catch {
+        return [] as ChatMessageReaction[]
+      }
+    })(),
   ])
 
-  throwIfError(conversationError)
+  throwIfError(conversationsResult.error)
   throwIfError(membersResult.error)
   throwIfError(messagesError)
 
+  const conversations = conversationsResult.data
   const members = membersResult.data
   const groupRows = (conversations ?? []).filter((c) => c.type === 'group')
   const groups: ChatGroup[] = groupRows.map((group) => ({
     id: group.id,
     name: group.name || 'Group',
+    description: (group as any).description || '',
+    avatarUrl: (group as any).avatar_url || '',
     memberIds: (members ?? [])
       .filter((m) => m.conversation_id === group.id)
       .map((m) => m.employee_id),
@@ -406,11 +447,20 @@ export async function loadChatState(employeeId: string): Promise<ChatState> {
     createdAt: group.created_at,
   }))
 
+  const reactionsMap: Record<string, ChatMessageReaction[]> = {}
+  ;(reactionsResult || []).forEach((r) => {
+    if (!reactionsMap[r.message_id]) {
+      reactionsMap[r.message_id] = []
+    }
+    reactionsMap[r.message_id].push(r)
+  })
+
   return {
     messages: (messages ?? []) as ChatMessageRow[],
     conversations: (conversations ?? []) as ChatConversationRow[],
     members: (members ?? []) as ChatMemberRow[],
     groups,
+    reactions: reactionsMap,
   }
 }
 
@@ -503,25 +553,57 @@ export async function markConversationAsRead(
 }
 
 /**
- * Updates a group conversation name.
+ * Updates a group conversation name, description, and avatar.
  * Supabase RLS enforces that only group creator or Chaitra (when member) can update.
+ */
+export async function updateGroupProfile(
+  conversationId: string,
+  updates: { name?: string; description?: string; avatarUrl?: string | null }
+): Promise<void> {
+  const payload: any = {}
+  if (updates.name !== undefined) {
+    const trimmed = updates.name.trim()
+    if (!trimmed) throw new Error('Group name cannot be empty')
+    payload.name = trimmed
+  }
+  if (updates.description !== undefined) {
+    payload.description = updates.description.trim()
+  }
+  if (updates.avatarUrl !== undefined) {
+    payload.avatar_url = updates.avatarUrl || null
+  }
+
+  if (Object.keys(payload).length === 0) return
+
+  const { error } = await supabase
+    .from('conversations')
+    .update(payload)
+    .eq('id', conversationId)
+    .eq('type', 'group')
+
+  if (error) {
+    // If error is due to missing columns in DB, fallback to updating just the name
+    if (payload.name && (updates.description !== undefined || updates.avatarUrl !== undefined)) {
+      const { error: nameError } = await supabase
+        .from('conversations')
+        .update({ name: payload.name })
+        .eq('id', conversationId)
+        .eq('type', 'group')
+      throwIfError(nameError)
+      return
+    }
+    throwIfError(error)
+  }
+}
+
+/**
+ * Updates a group conversation name (backward compatibility).
  */
 export async function updateGroupName(
   conversationId: string,
   name: string
 ): Promise<void> {
-  const trimmed = name.trim()
-  if (!trimmed) {
-    throw new Error('Group name cannot be empty')
-  }
-
-  const { error } = await supabase
-    .from('conversations')
-    .update({ name: trimmed })
-    .eq('id', conversationId)
-    .eq('type', 'group')
-
-  throwIfError(error)
+  return updateGroupProfile(conversationId, { name })
 }
 
 /**
@@ -546,9 +628,9 @@ export async function addMembersToGroup(
 }
 
 /**
- * Leaves a group conversation by deleting the member row from public.conversation_members.
+ * Removes a member from a group (can be called by creator, admin, or the member themselves).
  */
-export async function leaveGroup(
+export async function removeMemberFromGroup(
   conversationId: string,
   employeeId: string
 ): Promise<void> {
@@ -559,6 +641,56 @@ export async function leaveGroup(
     .eq('employee_id', employeeId)
 
   throwIfError(error)
+}
+
+/**
+ * Leaves a group conversation by deleting the member row from public.conversation_members.
+ */
+export async function leaveGroup(
+  conversationId: string,
+  employeeId: string
+): Promise<void> {
+  return removeMemberFromGroup(conversationId, employeeId)
+}
+
+/**
+ * Toggles a message reaction in the database (or graceful fallback).
+ * Returns 'add' if reaction was added, 'remove' if removed.
+ */
+export async function toggleMessageReaction(
+  conversationId: string,
+  messageId: string,
+  employeeId: string,
+  emoji: string,
+  currentHasReacted: boolean
+): Promise<'add' | 'remove'> {
+  if (currentHasReacted) {
+    try {
+      await supabase
+        .from('message_reactions')
+        .delete()
+        .eq('message_id', messageId)
+        .eq('employee_id', employeeId)
+        .eq('emoji', emoji)
+    } catch (err) {
+      console.warn('Could not delete reaction from database:', err)
+    }
+    return 'remove'
+  } else {
+    try {
+      await supabase
+        .from('message_reactions')
+        .insert({
+          conversation_id: conversationId,
+          message_id: messageId,
+          employee_id: employeeId,
+          emoji,
+        })
+    } catch (err) {
+      console.warn('Could not insert reaction into database:', err)
+    }
+    return 'add'
+  }
 }
 
 /**
@@ -590,15 +722,39 @@ export async function deleteGroup(conversationId: string): Promise<void> {
   throwIfError(error)
 }
 
+export type ReactionSignalPayload = {
+  conversationId: string
+  messageId: string
+  employeeId: string
+  emoji: string
+  action: 'add' | 'remove'
+}
+
+export type GroupUpdateSignalPayload = {
+  conversationId: string
+  name?: string
+  description?: string
+  avatarUrl?: string | null
+}
+
+export interface MessageSubscriptionHandle {
+  (): void
+  unsubscribe: () => void
+  broadcastReaction: (payload: ReactionSignalPayload) => Promise<void>
+  broadcastGroupUpdate: (payload: GroupUpdateSignalPayload) => Promise<void>
+}
+
 /**
- * Subscribes to realtime INSERT and DELETE events on public.messages for a specific conversation.
- * Returns an unsubscribe cleanup function.
+ * Subscribes to realtime INSERT and DELETE events on public.messages for a specific conversation,
+ * plus realtime broadcast events for reactions and group profile updates.
  */
 export function subscribeToMessages(
   conversationId: string,
   onMessage: (message: ChatMessageRow) => void,
-  onDelete?: (messageId: string) => void
-) {
+  onDelete?: (messageId: string) => void,
+  onReaction?: (reaction: ReactionSignalPayload) => void,
+  onGroupUpdate?: (update: GroupUpdateSignalPayload) => void
+): MessageSubscriptionHandle {
   const channel = supabase
     .channel(`messages:${conversationId}`)
     .on(
@@ -628,15 +784,63 @@ export function subscribeToMessages(
         }
       }
     )
+    .on(
+      'broadcast',
+      { event: 'reaction' },
+      (payload) => {
+        if (payload.payload && onReaction) {
+          onReaction(payload.payload as ReactionSignalPayload)
+        }
+      }
+    )
+    .on(
+      'broadcast',
+      { event: 'group_update' },
+      (payload) => {
+        if (payload.payload && onGroupUpdate) {
+          onGroupUpdate(payload.payload as GroupUpdateSignalPayload)
+        }
+      }
+    )
     .subscribe((status, error) => {
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
         console.error(`Realtime error on messages:${conversationId}:`, status, error)
       }
     })
 
-  return () => {
+  const unsubscribeFn = (() => {
+    void supabase.removeChannel(channel)
+  }) as MessageSubscriptionHandle
+
+  unsubscribeFn.unsubscribe = () => {
     void supabase.removeChannel(channel)
   }
+
+  unsubscribeFn.broadcastReaction = async (payload: ReactionSignalPayload) => {
+    try {
+      await channel.send({
+        type: 'broadcast',
+        event: 'reaction',
+        payload,
+      })
+    } catch (err) {
+      console.warn('Could not broadcast reaction:', err)
+    }
+  }
+
+  unsubscribeFn.broadcastGroupUpdate = async (payload: GroupUpdateSignalPayload) => {
+    try {
+      await channel.send({
+        type: 'broadcast',
+        event: 'group_update',
+        payload,
+      })
+    } catch (err) {
+      console.warn('Could not broadcast group update:', err)
+    }
+  }
+
+  return unsubscribeFn
 }
 
 /**

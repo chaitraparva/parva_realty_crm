@@ -95,7 +95,7 @@ export default function Notifications({ notifs, onMarkRead, onMarkAllRead }: Not
                     {!notif.read && <span className="w-2 h-2 rounded-full bg-accent ml-auto shrink-0" />}
                   </div>
                   <p className="text-sm text-muted-foreground leading-relaxed">{notif.message}</p>
-                  <p className="text-xs text-muted-foreground mt-2">{notif.timestamp}</p>
+                  <p className="text-xs text-muted-foreground mt-2">{(() => { const d = new Date(notif.timestamp); return isNaN(d.getTime()) ? notif.timestamp : d.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) })()}</p>
                 </div>
               </div>
             </div>

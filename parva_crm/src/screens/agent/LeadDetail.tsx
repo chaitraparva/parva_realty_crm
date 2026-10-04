@@ -397,7 +397,7 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
                 { icon: <IndianRupee size={14} />, label: 'Budget', value: lead.budget },
                 { icon: <Building2 size={14} />, label: 'Property Type', value: lead.propertyType },
                 { icon: <MapPin size={14} />, label: 'Location', value: lead.location },
-                { icon: <Clock size={14} />, label: 'Lead Created', value: lead.createdAt },
+                { icon: <Clock size={14} />, label: 'Lead Created', value: (() => { const d = new Date(lead.createdAt); return isNaN(d.getTime()) ? lead.createdAt : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) })() },
               ].map((info) => (
                 <div key={info.label}>
                   <div className="flex items-center gap-1.5 text-muted-foreground mb-1">

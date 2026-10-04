@@ -5,6 +5,7 @@ import Sidebar from './Sidebar'
 import TopBar from './TopBar'
 import ProfileModal from './ProfileModal'
 import GlobalSearch from './GlobalSearch'
+import { supabase } from '../../lib/supabase'
 import { Menu, Target, Users, LayoutDashboard, MessageCircle, Bell, TrendingUp } from 'lucide-react'
 
 const mobileBottomNav: Record<Role, { id: string; icon: React.ReactNode; label: string }[]> = {
@@ -69,6 +70,22 @@ export default function Layout({
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const user = { name: currentUserName, email: currentUserEmail }
+  const [myAvatar, setMyAvatar] = useState<string | null>(null)
+
+  // Load my own saved profile photo (column may not exist until profile_avatar.sql is run).
+  useEffect(() => {
+    if (!currentUserEmail) return
+    let active = true
+    supabase
+      .from('employees')
+      .select('avatar_url')
+      .ilike('email', currentUserEmail)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (active && !error) setMyAvatar((data as { avatar_url?: string | null } | null)?.avatar_url || null)
+      })
+    return () => { active = false }
+  }, [currentUserEmail])
 
   const navigate = (screen: string, params?: Record<string, string>) => {
     setMobileNavOpen(false)
@@ -111,6 +128,7 @@ export default function Layout({
         onMarkAllRead={onMarkAllRead}
         onNavigate={onNavigate}
         onOpenProfile={() => setProfileOpen(true)}
+        avatarUrl={myAvatar}
         onMenuClick={() => setMobileNavOpen(true)}
         onSearchClick={() => setSearchOpen(true)}
         darkMode={darkMode}
@@ -145,7 +163,7 @@ export default function Layout({
           <span className="text-[10px] font-medium">More</span>
         </button>
       </div>
-      <ProfileModal open={profileOpen} onClose={() => setProfileOpen(false)} role={role} name={user.name} email={user.email} />
+      <ProfileModal open={profileOpen} onClose={() => setProfileOpen(false)} role={role} name={user.name} email={user.email} avatarUrl={myAvatar} onAvatarSaved={setMyAvatar} />
       <GlobalSearch open={searchOpen} onClose={() => setSearchOpen(false)} onNavigate={onNavigate} groupList={groupList} />
     </div>
   )

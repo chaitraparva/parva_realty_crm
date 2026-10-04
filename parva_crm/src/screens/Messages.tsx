@@ -1,10 +1,40 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
-import { Send, ArrowLeft, Search, Paperclip, FileText, X as XIcon, MessageCircle, Phone, Mail, PhoneMissed, PhoneOff, PhoneIncoming, Plus, Video, Users, Check, Trash2, Edit2, LogOut, UserPlus } from 'lucide-react'
+import {
+  Send,
+  ArrowLeft,
+  Search,
+  Paperclip,
+  FileText,
+  X as XIcon,
+  MessageCircle,
+  Phone,
+  Mail,
+  PhoneMissed,
+  PhoneOff,
+  PhoneIncoming,
+  Plus,
+  Video,
+  Users,
+  Check,
+  Trash2,
+  Edit2,
+  LogOut,
+  UserPlus,
+  Smile,
+  Copy,
+  Reply,
+  Camera,
+  CheckCheck,
+  SmilePlus,
+  UserMinus,
+} from 'lucide-react'
 import { useData } from '../contexts/DataContext'
 import { supabase } from '../lib/supabase'
 import LiveKitCallWindow from '../components/calls/LiveKitCallWindow'
 import IncomingCall from '../components/calls/IncomingCall'
 import Modal from '../components/ui/Modal'
+import EmojiPicker from '../components/chat/EmojiPicker'
+import { compressImageToDataUrl } from '../components/ui/Avatar'
 import {
   subscribeToCallSignals,
   broadcastCallSignal,
@@ -20,8 +50,11 @@ import {
   deleteGroup,
   markConversationAsRead,
   updateGroupName,
+  updateGroupProfile,
   addMembersToGroup,
+  removeMemberFromGroup,
   leaveGroup,
+  toggleMessageReaction,
   subscribeToChat,
   subscribeToMessages,
   getAllEmployees,
@@ -30,11 +63,21 @@ import {
   type ChatGroup,
   type ChatMessageRow,
   type ChatEmployee,
+  type ChatMessageReaction,
+  type ReactionSignalPayload,
+  type GroupUpdateSignalPayload,
+  type MessageSubscriptionHandle,
 } from '../services/chatService'
 import { markConversationNotificationsAsRead } from '../services/notificationService'
 import type { Dispatch, SetStateAction } from 'react'
 
 type Tab = 'chat' | 'calls' | 'email'
+
+export type MessageReplyMeta = {
+  replyToId: string
+  replyToSenderName: string
+  replyToText: string
+}
 
 type UiMessage = {
   id: string
@@ -45,6 +88,7 @@ type UiMessage = {
   read: boolean
   attachmentName?: string
   attachmentUrl?: string
+  replyMeta?: MessageReplyMeta
 }
 
 type UiGroupMessage = UiMessage & {
@@ -65,6 +109,65 @@ type UiGroupConversation = {
   last?: UiGroupMessage
   unread: number
 }
+
+const MESSAGE_REPLY_PREFIX = '__PARVA_REPLY_META__'
+
+function parseMessageBody(rawBody: string | null | undefined): { text: string; replyMeta?: MessageReplyMeta } {
+  if (!rawBody) return { text: '' }
+  if (!rawBody.startsWith(MESSAGE_REPLY_PREFIX)) {
+    return { text: rawBody }
+  }
+  const newlineIdx = rawBody.indexOf('\n')
+  if (newlineIdx === -1) return { text: rawBody }
+  try {
+    const meta = JSON.parse(rawBody.slice(MESSAGE_REPLY_PREFIX.length, newlineIdx)) as MessageReplyMeta
+    return {
+      text: rawBody.slice(newlineIdx + 1),
+      replyMeta: meta && typeof meta === 'object' && meta.replyToText ? meta : undefined,
+    }
+  } catch {
+    return { text: rawBody }
+  }
+}
+
+function serializeMessageBody(text: string, replyMeta?: MessageReplyMeta): string {
+  if (!replyMeta) return text
+  return `${MESSAGE_REPLY_PREFIX}${JSON.stringify(replyMeta)}\n${text}`
+}
+
+const GROUP_GRADIENTS = [
+  'linear-gradient(135deg, #1C2B4A 0%, #2A3F6D 100%)',
+  'linear-gradient(135deg, #8C6D32 0%, #C9A96E 100%)',
+  'linear-gradient(135deg, #065F46 0%, #10B981 100%)',
+  'linear-gradient(135deg, #4C1D95 0%, #8B5CF6 100%)',
+  'linear-gradient(135deg, #991B1B 0%, #EF4444 100%)',
+  'linear-gradient(135deg, #1E3A8A 0%, #3B82F6 100%)',
+]
+
+function getGroupGradient(name: string): string {
+  let hash = 0
+  for (let i = 0; i < (name || '').length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash)
+  }
+  const index = Math.abs(hash) % GROUP_GRADIENTS.length
+  return GROUP_GRADIENTS[index]
+}
+
+function getGroupInitials(name: string): string {
+  const parts = (name || 'Group').trim().split(/\s+/)
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[1][0]).toUpperCase()
+}
+
+// Preset luxury avatars for CRM groups
+const PRESET_GROUP_AVATARS = [
+  { id: 'dubai_skyline', label: 'Dubai Skyline', emoji: '🏙️', bg: 'linear-gradient(135deg, #1C2B4A, #3B82F6)' },
+  { id: 'luxury_villa', label: 'Luxury Villa', emoji: '🏡', bg: 'linear-gradient(135deg, #8C6D32, #C9A96E)' },
+  { id: 'palm_oasis', label: 'Palm Oasis', emoji: '🌴', bg: 'linear-gradient(135deg, #065F46, #10B981)' },
+  { id: 'deal_closing', label: 'Deal Makers', emoji: '🤝', bg: 'linear-gradient(135deg, #4C1D95, #8B5CF6)' },
+  { id: 'golden_key', label: 'Golden Key', emoji: '🔑', bg: 'linear-gradient(135deg, #78350F, #F59E0B)' },
+  { id: 'top_sales', label: 'Target Achievers', emoji: '🎯', bg: 'linear-gradient(135deg, #991B1B, #EF4444)' },
+]
 
 function initials(name: string) {
   return (name || '').split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
@@ -386,9 +489,35 @@ export default function Messages({
   const [pendingAttachment, setPendingAttachment] = useState<{ name: string; url: string } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const [chatState, setChatState] = useState<ChatState>({ messages: [], conversations: [], members: [], groups: [] })
+  const [chatState, setChatState] = useState<ChatState>({ messages: [], conversations: [], members: [], groups: [], reactions: {} })
   const [chatLoading, setChatLoading] = useState(true)
   const [chatError, setChatError] = useState('')
+
+  // New WhatsApp-style features state
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  const [replyingToMessage, setReplyingToMessage] = useState<MessageReplyMeta | null>(null)
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
+  const [reactionPickerForMessageId, setReactionPickerForMessageId] = useState<string | null>(null)
+  const activeSubscriptionRef = useRef<MessageSubscriptionHandle | null>(null)
+
+  // Group Info / Profile editing state
+  const [editingGroupProfile, setEditingGroupProfile] = useState(false)
+  const [editProfileName, setEditProfileName] = useState('')
+  const [editProfileDescription, setEditProfileDescription] = useState('')
+  const [editProfileAvatarUrl, setEditProfileAvatarUrl] = useState<string | null>(null)
+  const [editingGroupName, setEditingGroupName] = useState(false)
+  const [editGroupNameInput, setEditGroupNameInput] = useState('')
+  const [savingGroupName, setSavingGroupName] = useState(false)
+  const [editingGroupDescription, setEditingGroupDescription] = useState(false)
+  const [editGroupDescriptionInput, setEditGroupDescriptionInput] = useState('')
+  const [savingGroupDescription, setSavingGroupDescription] = useState(false)
+  const [showAvatarPickerModal, setShowAvatarPickerModal] = useState(false)
+  const [savingGroupAvatar, setSavingGroupAvatar] = useState(false)
+  const [savingGroupProfile, setSavingGroupProfile] = useState(false)
+  const [memberSearchQuery, setMemberSearchQuery] = useState('')
+  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null)
+  const [removingMemberLoading, setRemovingMemberLoading] = useState(false)
+  const groupAvatarFileInputRef = useRef<HTMLInputElement>(null)
 
   const callLogs = callLogsList
   const setCallLogs = (value: SetStateAction<CallLog[]>) => {
@@ -420,9 +549,6 @@ export default function Messages({
   const [deletingMessageLoading, setDeletingMessageLoading] = useState(false)
   const [showDeleteGroupConfirm, setShowDeleteGroupConfirm] = useState(false)
   const [deletingGroupLoading, setDeletingGroupLoading] = useState(false)
-  const [editingGroupName, setEditingGroupName] = useState(false)
-  const [editGroupNameInput, setEditGroupNameInput] = useState('')
-  const [savingGroupName, setSavingGroupName] = useState(false)
   const [showAddMembersModal, setShowAddMembersModal] = useState(false)
   const [newMemberSelection, setNewMemberSelection] = useState<Set<string>>(new Set())
   const [addingMembersLoading, setAddingMembersLoading] = useState(false)
@@ -608,6 +734,13 @@ export default function Messages({
     [allEmployees, activeEmployeeId]
   )
 
+  const groupMemberNames = (group: ChatGroup) =>
+    group.memberIds
+      .map((id) => allEmployees.find((e: any) => e.id === id)?.name?.split(' ')[0])
+      .filter(Boolean)
+      .slice(0, 4)
+      .join(', ') + (group.memberIds.length > 4 ? ` +${group.memberIds.length - 4}` : '')
+
   const directConversationFor = (contactId: string) =>
     chatState.conversations.find((conversation) =>
       conversation.type === 'direct' &&
@@ -615,16 +748,20 @@ export default function Messages({
       chatState.members.some((m) => m.conversation_id === conversation.id && m.employee_id === contactId)
     )
 
-  const toUiMessage = (row: ChatMessageRow, recipientId?: string): UiMessage => ({
-    id: row.id,
-    senderId: row.sender_id,
-    recipientId,
-    text: row.body || '',
-    timestamp: row.created_at,
-    read: true,
-    attachmentName: row.attachment_name || undefined,
-    attachmentUrl: row.attachment_url || undefined,
-  })
+  const toUiMessage = (row: ChatMessageRow, recipientId?: string): UiMessage => {
+    const parsed = parseMessageBody(row.body || '')
+    return {
+      id: row.id,
+      senderId: row.sender_id,
+      recipientId,
+      text: parsed.text,
+      replyMeta: parsed.replyMeta,
+      timestamp: row.created_at,
+      read: true,
+      attachmentName: row.attachment_name || undefined,
+      attachmentUrl: row.attachment_url || undefined,
+    }
+  }
 
   const conversations = useMemo<UiConversation[]>(() => {
     const searchLower = search.trim().toLowerCase()
@@ -746,10 +883,72 @@ export default function Messages({
           ...prev,
           messages: prev.messages.filter((m) => m.id !== deletedMessageId),
         }))
+      },
+      // Realtime reaction broadcast handler
+      (reactionSignal) => {
+        setChatState((prev) => {
+          const currentList = prev.reactions[reactionSignal.messageId] || []
+          let updated: ChatMessageReaction[]
+          if (reactionSignal.action === 'remove') {
+            updated = currentList.filter(
+              (r) => !(r.employee_id === reactionSignal.employeeId && r.emoji === reactionSignal.emoji)
+            )
+          } else {
+            const exists = currentList.some(
+              (r) => r.employee_id === reactionSignal.employeeId && r.emoji === reactionSignal.emoji
+            )
+            if (exists) return prev
+            updated = [
+              ...currentList,
+              {
+                conversation_id: reactionSignal.conversationId,
+                message_id: reactionSignal.messageId,
+                employee_id: reactionSignal.employeeId,
+                emoji: reactionSignal.emoji,
+              },
+            ]
+          }
+          return {
+            ...prev,
+            reactions: {
+              ...prev.reactions,
+              [reactionSignal.messageId]: updated,
+            },
+          }
+        })
+      },
+      // Realtime group update broadcast handler
+      (groupUpdateSignal) => {
+        setChatState((prev) => ({
+          ...prev,
+          groups: prev.groups.map((g) =>
+            g.id === groupUpdateSignal.conversationId
+              ? {
+                  ...g,
+                  name: groupUpdateSignal.name !== undefined ? groupUpdateSignal.name : g.name,
+                  description: groupUpdateSignal.description !== undefined ? groupUpdateSignal.description : g.description,
+                  avatarUrl: groupUpdateSignal.avatarUrl !== undefined ? (groupUpdateSignal.avatarUrl || undefined) : g.avatarUrl,
+                }
+              : g
+          ),
+          conversations: prev.conversations.map((c) =>
+            c.id === groupUpdateSignal.conversationId
+              ? {
+                  ...c,
+                  name: groupUpdateSignal.name !== undefined ? groupUpdateSignal.name : c.name,
+                  description: groupUpdateSignal.description !== undefined ? groupUpdateSignal.description : c.description,
+                  avatar_url: groupUpdateSignal.avatarUrl !== undefined ? groupUpdateSignal.avatarUrl : c.avatar_url,
+                }
+              : c
+          ),
+        }))
       }
     )
 
+    activeSubscriptionRef.current = unsubscribe
+
     return () => {
+      activeSubscriptionRef.current = null
       unsubscribe()
     }
   }, [selectedId, selectedGroupConvo?.group.id, chatState.conversations, chatState.members, activeEmployeeId])
@@ -782,23 +981,223 @@ export default function Messages({
     }
   }, [selectedId, activeEmployeeId, chatState.conversations.length, selectedGroupConvo?.group.id])
 
+  const handleToggleReaction = async (messageId: string, emoji: string) => {
+    if (!activeEmployeeId) return
+    const activeConvoId = selectedGroupConvo
+      ? selectedGroupConvo.group.id
+      : directConversationFor(selectedId || '')?.id
+    if (!activeConvoId) return
+
+    const currentReactions = chatState.reactions[messageId] || []
+    const alreadyReacted = currentReactions.some(
+      (r) => r.employee_id === activeEmployeeId && r.emoji === emoji
+    )
+    const action: 'add' | 'remove' = alreadyReacted ? 'remove' : 'add'
+
+    // 1. Optimistic update in UI
+    setChatState((prev) => {
+      const list = prev.reactions[messageId] || []
+      const nextList = alreadyReacted
+        ? list.filter((r) => !(r.employee_id === activeEmployeeId && r.emoji === emoji))
+        : [...list, { conversation_id: activeConvoId, message_id: messageId, employee_id: activeEmployeeId, emoji }]
+      return {
+        ...prev,
+        reactions: {
+          ...prev.reactions,
+          [messageId]: nextList,
+        },
+      }
+    })
+
+    // 2. Realtime broadcast to peers
+    if (activeSubscriptionRef.current?.broadcastReaction) {
+      void activeSubscriptionRef.current.broadcastReaction({
+        conversationId: activeConvoId,
+        messageId,
+        employeeId: activeEmployeeId,
+        emoji,
+        action,
+      })
+    }
+
+    // 3. Persist to database
+    void toggleMessageReaction(activeConvoId, messageId, activeEmployeeId, emoji, alreadyReacted)
+  }
+
+  const handleCopyMessage = (text: string, id: string) => {
+    if (!text) return
+    void navigator.clipboard.writeText(text)
+    setCopiedMessageId(id)
+    setTimeout(() => setCopiedMessageId(null), 2000)
+  }
+
+  const startEditingGroupProfile = () => {
+    if (!selectedGroupConvo) return
+    setEditProfileName(selectedGroupConvo.group.name || '')
+    setEditProfileDescription(selectedGroupConvo.group.description || '')
+    setEditProfileAvatarUrl(selectedGroupConvo.group.avatarUrl || null)
+    setEditingGroupProfile(true)
+  }
+
+  const cancelEditingGroupProfile = () => {
+    setEditingGroupProfile(false)
+  }
+
+  const handleSaveGroupProfile = async () => {
+    if (!selectedGroupConvo || !editProfileName.trim()) return
+    const groupId = selectedGroupConvo.group.id
+    try {
+      setSavingGroupProfile(true)
+      const name = editProfileName.trim()
+      const description = editProfileDescription.trim()
+      const avatarUrl = editProfileAvatarUrl || null
+
+      await updateGroupProfile(groupId, {
+        name,
+        description,
+        avatarUrl,
+      })
+
+      // Update UI immediately (chatState.groups & chatState.conversations)
+      setChatState((prev) => ({
+        ...prev,
+        groups: prev.groups.map((g) =>
+          g.id === groupId
+            ? { ...g, name, description, avatarUrl: avatarUrl || undefined }
+            : g
+        ),
+        conversations: prev.conversations.map((c) =>
+          c.id === groupId
+            ? { ...c, name, description, avatar_url: avatarUrl }
+            : c
+        ),
+      }))
+
+      // Broadcast update in realtime to all other members in this conversation
+      if (activeSubscriptionRef.current?.broadcastGroupUpdate) {
+        void activeSubscriptionRef.current.broadcastGroupUpdate({
+          conversationId: groupId,
+          name,
+          description,
+          avatarUrl,
+        })
+      }
+
+      setEditingGroupProfile(false)
+    } catch (err) {
+      console.error('Failed to update group profile:', err)
+      alert(err instanceof Error ? err.message : 'Could not update group profile')
+    } finally {
+      setSavingGroupProfile(false)
+    }
+  }
+
+  // Saves one field of the group profile and updates local state + other members.
+  const saveGroupField = async (
+    updates: { name?: string; description?: string; avatarUrl?: string | null }
+  ) => {
+    if (!selectedGroupConvo) return
+    const groupId = selectedGroupConvo.group.id
+    await updateGroupProfile(groupId, updates)
+    setChatState((prev) => ({
+      ...prev,
+      groups: prev.groups.map((g) => {
+        if (g.id !== groupId) return g
+        return {
+          ...g,
+          ...(updates.name !== undefined ? { name: updates.name.trim() } : {}),
+          ...(updates.description !== undefined ? { description: updates.description.trim() } : {}),
+          ...(updates.avatarUrl !== undefined ? { avatarUrl: updates.avatarUrl || undefined } : {}),
+        }
+      }),
+      conversations: prev.conversations.map((c) => {
+        if (c.id !== groupId) return c
+        return {
+          ...c,
+          ...(updates.name !== undefined ? { name: updates.name.trim() } : {}),
+          ...(updates.description !== undefined ? { description: updates.description.trim() } : {}),
+          ...(updates.avatarUrl !== undefined ? { avatar_url: updates.avatarUrl || null } : {}),
+        }
+      }),
+    }))
+    if (activeSubscriptionRef.current?.broadcastGroupUpdate) {
+      void activeSubscriptionRef.current.broadcastGroupUpdate({ conversationId: groupId, ...updates })
+    }
+  }
+
   const handleSaveGroupName = async () => {
     if (!selectedGroupConvo || !editGroupNameInput.trim()) return
     try {
       setSavingGroupName(true)
-      const trimmed = editGroupNameInput.trim()
-      await updateGroupName(selectedGroupConvo.group.id, trimmed)
-      setChatState((prev) => ({
-        ...prev,
-        groups: prev.groups.map((g) => g.id === selectedGroupConvo.group.id ? { ...g, name: trimmed } : g),
-        conversations: prev.conversations.map((c) => c.id === selectedGroupConvo.group.id ? { ...c, name: trimmed } : c),
-      }))
+      await saveGroupField({ name: editGroupNameInput })
       setEditingGroupName(false)
     } catch (err) {
       console.error('Failed to update group name:', err)
       alert(err instanceof Error ? err.message : 'Could not update group name')
     } finally {
       setSavingGroupName(false)
+    }
+  }
+
+  const handleSaveGroupDescription = async () => {
+    if (!selectedGroupConvo) return
+    try {
+      setSavingGroupDescription(true)
+      await saveGroupField({ description: editGroupDescriptionInput })
+      setEditingGroupDescription(false)
+    } catch (err) {
+      console.error('Failed to update group description:', err)
+      alert(err instanceof Error ? err.message : 'Could not update group description')
+    } finally {
+      setSavingGroupDescription(false)
+    }
+  }
+
+  const handleSaveGroupAvatar = async (avatarUrl: string | null) => {
+    if (!selectedGroupConvo) return
+    try {
+      setSavingGroupAvatar(true)
+      await saveGroupField({ avatarUrl })
+      setShowAvatarPickerModal(false)
+    } catch (err) {
+      console.error('Failed to update group avatar:', err)
+      alert(err instanceof Error ? err.message : 'Could not update group icon')
+    } finally {
+      setSavingGroupAvatar(false)
+    }
+  }
+
+  const handleAvatarFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    compressImageToDataUrl(file)
+      .then((dataUrl) => handleSaveGroupAvatar(dataUrl))
+      .catch(() => alert('Could not use that image. Please pick a different photo.'))
+    e.target.value = ''
+  }
+
+  const handleRemoveMember = async () => {
+    if (!selectedGroupConvo || !removingMemberId) return
+    try {
+      setRemovingMemberLoading(true)
+      await removeMemberFromGroup(selectedGroupConvo.group.id, removingMemberId)
+      setChatState((prev) => ({
+        ...prev,
+        members: prev.members.filter(
+          (m) => !(m.conversation_id === selectedGroupConvo.group.id && m.employee_id === removingMemberId)
+        ),
+        groups: prev.groups.map((g) =>
+          g.id === selectedGroupConvo.group.id
+            ? { ...g, memberIds: g.memberIds.filter((id) => id !== removingMemberId) }
+            : g
+        ),
+      }))
+      setRemovingMemberId(null)
+    } catch (err) {
+      console.error('Failed to remove member:', err)
+      alert(err instanceof Error ? err.message : 'Could not remove member from group')
+    } finally {
+      setRemovingMemberLoading(false)
     }
   }
 
@@ -979,10 +1378,11 @@ export default function Messages({
       }
 
       const myEmp = allEmployees.find((e) => e.id === activeEmployeeId)
+      const finalBody = serializeMessageBody(draft.trim(), replyingToMessage || undefined)
       const saved = await saveMessage(
         conversationId,
         activeEmployeeId,
-        draft.trim(),
+        finalBody,
         pendingAttachment?.name,
         pendingAttachment?.url,
         myEmp?.name
@@ -990,6 +1390,8 @@ export default function Messages({
 
       setDraft('')
       setPendingAttachment(null)
+      setReplyingToMessage(null)
+      setShowEmojiPicker(false)
 
       // Add to local state immediately without waiting
       setChatState((prev) => {
@@ -1267,12 +1669,261 @@ export default function Messages({
     ? emails.filter((e) => e.groupId === selectedGroupConvo.group.id).sort((a, b) => b.timestamp.localeCompare(a.timestamp))
     : []
 
-  const groupMemberNames = (group: ChatGroup) =>
-    group.memberIds
-      .filter((id) => id !== activeEmployeeId)
-      .map((id) => allEmployees.find((e: any) => e.id === id)?.name?.split(' ')[0])
-      .filter(Boolean)
-      .join(', ')
+  const renderMessageBubble = (m: UiMessage | UiGroupMessage, isGroup: boolean) => {
+    const mine = m.senderId === activeEmployeeId
+    const sender = allEmployees.find((e) => e.id === m.senderId)
+    const isCopied = copiedMessageId === m.id
+    const reactions = chatState.reactions[m.id] || []
+
+    // Group reactions by emoji
+    const reactionMap = new Map<string, { emoji: string; count: number; userIds: string[]; reactedByMe: boolean }>()
+    reactions.forEach((r) => {
+      let item = reactionMap.get(r.emoji)
+      if (!item) {
+        item = { emoji: r.emoji, count: 0, userIds: [], reactedByMe: false }
+        reactionMap.set(r.emoji, item)
+      }
+      item.count++
+      item.userIds.push(r.employee_id)
+      if (r.employee_id === activeEmployeeId) {
+        item.reactedByMe = true
+      }
+    })
+    const groupedReactions = Array.from(reactionMap.values())
+
+    const getReactionTooltip = (userIds: string[]) => {
+      return userIds
+        .map((uid) => {
+          if (uid === activeEmployeeId) return 'You'
+          return allEmployees.find((e) => e.id === uid)?.name?.split(' ')[0] || 'Someone'
+        })
+        .join(', ')
+    }
+
+    return (
+      <div
+        key={m.id}
+        id={`msg-${m.id}`}
+        className={`group relative flex items-end gap-2 my-1 transition-all ${
+          mine ? 'justify-end' : 'justify-start'
+        }`}
+      >
+        {/* Sender Avatar for Group chats when not mine */}
+        {isGroup && !mine && (
+          <div
+            className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-semibold shrink-0 mb-1 shadow-xs"
+            style={{ backgroundColor: 'rgba(28,43,74,0.1)', color: '#1C2B4A' }}
+            title={sender?.name}
+          >
+            {initials(sender?.name || '')}
+          </div>
+        )}
+
+        <div className="relative max-w-[82%] sm:max-w-[68%] flex flex-col">
+          {/* Floating WhatsApp Quick Action & Reaction Bar on hover */}
+          <div
+            className={`absolute -top-7 ${
+              mine ? 'right-0' : 'left-0'
+            } opacity-0 group-hover:opacity-100 transition-all duration-150 z-20 flex items-center gap-0.5 bg-card/95 backdrop-blur-xs px-2 py-0.5 rounded-full border border-border/80 shadow-md text-muted-foreground`}
+          >
+            {/* Quick 6 WhatsApp Reactions */}
+            <div className="flex items-center gap-0.5 pr-1 border-r border-border/60">
+              {['❤️', '👍', '😂', '😮', '😢', '🙏'].map((emoji) => {
+                const alreadyReacted = reactions.some(
+                  (r) => r.employee_id === activeEmployeeId && r.emoji === emoji
+                )
+                return (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => void handleToggleReaction(m.id, emoji)}
+                    className={`w-6 h-6 flex items-center justify-center text-sm rounded-full hover:scale-130 transition-transform ${
+                      alreadyReacted ? 'bg-accent/25' : 'hover:bg-muted'
+                    }`}
+                    title={`React ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                )
+              })}
+              <button
+                type="button"
+                onClick={() => setReactionPickerForMessageId(reactionPickerForMessageId === m.id ? null : m.id)}
+                className="w-6 h-6 flex items-center justify-center text-xs rounded-full hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                title="More emojis"
+              >
+                <SmilePlus size={13} />
+              </button>
+            </div>
+
+            {/* Reply / Quote Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setReplyingToMessage({
+                  replyToId: m.id,
+                  replyToSenderName: sender?.name || (mine ? 'You' : 'Someone'),
+                  replyToText: m.text || m.attachmentName || 'Attachment',
+                })
+              }}
+              className="p-1 rounded-full hover:bg-muted hover:text-foreground transition-colors"
+              title="Reply"
+            >
+              <Reply size={13} />
+            </button>
+
+            {/* Copy Button */}
+            {m.text && (
+              <button
+                type="button"
+                onClick={() => handleCopyMessage(m.text, m.id)}
+                className="p-1 rounded-full hover:bg-muted hover:text-foreground transition-colors"
+                title={isCopied ? 'Copied!' : 'Copy text'}
+              >
+                {isCopied ? <Check size={13} className="text-emerald-500" /> : <Copy size={13} />}
+              </button>
+            )}
+
+            {/* Delete Button (mine or admin) */}
+            {(mine || role === 'admin') && (
+              <button
+                type="button"
+                onClick={() => setDeletingMessageId(m.id)}
+                className="p-1 rounded-full hover:bg-red-50 hover:text-red-500 transition-colors"
+                title="Delete message"
+              >
+                <Trash2 size={13} />
+              </button>
+            )}
+          </div>
+
+          {/* Full Emoji Picker Popover if '+' was clicked */}
+          {reactionPickerForMessageId === m.id && (
+            <div className="relative z-30">
+              <EmojiPicker
+                onSelectEmoji={(emoji) => {
+                  void handleToggleReaction(m.id, emoji)
+                  setReactionPickerForMessageId(null)
+                }}
+                onClose={() => setReactionPickerForMessageId(null)}
+                position={mine ? 'top-right' : 'top-left'}
+              />
+            </div>
+          )}
+
+          {/* Message Bubble */}
+          <div
+            className="relative px-3.5 py-2 rounded-2xl text-sm shadow-xs transition-shadow"
+            style={{
+              backgroundColor: mine ? '#1C2B4A' : '#FFFFFF',
+              color: mine ? '#FAF8F5' : '#1C2B4A',
+              border: mine ? '1px solid #1C2B4A' : '1px solid #E5DFD5',
+              borderBottomRightRadius: mine ? 4 : undefined,
+              borderBottomLeftRadius: !mine ? 4 : undefined,
+            }}
+          >
+            {/* Sender Header for Group Chats when not mine */}
+            {isGroup && !mine && (
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="text-[11px] font-bold tracking-tight" style={{ color: '#C9A96E' }}>
+                  {sender?.name || 'Team Member'}
+                </span>
+                {sender?.team && (
+                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-muted/60 text-muted-foreground uppercase font-medium">
+                    {sender.team}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Quoted Message Card (if replyMeta exists) */}
+            {m.replyMeta && (
+              <div
+                onClick={() => {
+                  const target = document.getElementById(`msg-${m.replyMeta?.replyToId}`)
+                  if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    target.classList.add('ring-2', 'ring-accent', 'rounded-2xl')
+                    setTimeout(() => target.classList.remove('ring-2', 'ring-accent'), 1500)
+                  }
+                }}
+                className="mb-2 p-2 rounded-lg cursor-pointer text-xs transition-opacity hover:opacity-90 flex flex-col border-l-3"
+                style={{
+                  backgroundColor: mine ? 'rgba(255, 255, 255, 0.12)' : 'rgba(201, 169, 110, 0.12)',
+                  borderColor: '#C9A96E',
+                }}
+              >
+                <span className="font-semibold text-[11px]" style={{ color: mine ? '#FAF8F5' : '#8C6D32' }}>
+                  {m.replyMeta.replyToSenderName}
+                </span>
+                <span className="truncate opacity-80 mt-0.5 text-[11px]">
+                  {m.replyMeta.replyToText}
+                </span>
+              </div>
+            )}
+
+            {/* Attachment Preview */}
+            {m.attachmentUrl && (
+              m.attachmentUrl.startsWith('data:image') ? (
+                <img
+                  src={m.attachmentUrl}
+                  alt={m.attachmentName || 'Image'}
+                  className="rounded-lg mb-1.5 max-h-48 w-full object-cover border border-black/5"
+                />
+              ) : (
+                <div
+                  className="flex items-center gap-2 mb-1.5 px-2.5 py-2 rounded-lg"
+                  style={{ backgroundColor: mine ? 'rgba(255,255,255,0.1)' : '#F5F2EC' }}
+                >
+                  <FileText size={14} className="shrink-0" />
+                  <span className="text-xs truncate flex-1">{m.attachmentName}</span>
+                </div>
+              )
+            )}
+
+            {/* Message Body */}
+            {m.text && <p className="leading-relaxed break-words whitespace-pre-wrap">{m.text}</p>}
+
+            {/* Bottom Timestamp & Status Row */}
+            <div className="flex items-center justify-end gap-1.5 mt-1 -mb-0.5">
+              <span className="text-[10px] opacity-60">
+                {formatTime(m.timestamp)}
+              </span>
+              {mine && (
+                <CheckCheck size={13} className="text-accent/90 shrink-0" />
+              )}
+            </div>
+          </div>
+
+          {/* Reaction Pill Chips below bubble */}
+          {groupedReactions.length > 0 && (
+            <div
+              className={`flex flex-wrap items-center gap-1 mt-1 z-10 ${
+                mine ? 'justify-end' : 'justify-start'
+              }`}
+            >
+              {groupedReactions.map(({ emoji, count, userIds, reactedByMe }) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => void handleToggleReaction(m.id, emoji)}
+                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium border shadow-2xs transition-all active:scale-95 ${
+                    reactedByMe
+                      ? 'bg-amber-50/90 border-amber-300 text-amber-900 font-bold'
+                      : 'bg-card/90 border-border text-foreground hover:bg-muted'
+                  }`}
+                  title={getReactionTooltip(userIds)}
+                >
+                  <span>{emoji}</span>
+                  {count > 1 && <span className="text-[10px] opacity-80">{count}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-[calc(100vh-8rem)] bg-card rounded-xl border border-border shadow-sm overflow-hidden">
@@ -1310,12 +1961,20 @@ export default function Messages({
                   className="w-full flex items-center gap-3 px-4 py-3 border-b border-border/60 hover:bg-muted/40 transition-colors text-left"
                   style={{ backgroundColor: selectedId === group.id ? 'rgba(201,169,110,0.08)' : undefined }}
                 >
-                  <div
-                    className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
-                    style={{ backgroundColor: 'rgba(201,169,110,0.15)', color: '#C9A96E' }}
-                  >
-                    <Users size={16} />
-                  </div>
+                  {group.avatarUrl ? (
+                    <img
+                      src={group.avatarUrl}
+                      alt={group.name}
+                      className="w-10 h-10 rounded-full object-cover shrink-0 shadow-xs border border-border/40"
+                    />
+                  ) : (
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs text-white shrink-0 shadow-xs"
+                      style={{ background: getGroupGradient(group.name) }}
+                    >
+                      {getGroupInitials(group.name)}
+                    </div>
+                  )}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-sm font-semibold text-foreground truncate">{group.name}</p>
@@ -1323,7 +1982,7 @@ export default function Messages({
                     </div>
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs text-muted-foreground truncate">
-                        {last ? `${allEmployees.find((e) => e.id === last.senderId)?.name.split(' ')[0] || 'Someone'}: ${last.text || (last.attachmentName ? 'Attachment' : 'Sent an attachment')}` : `${group.memberIds.length} members`}
+                        {last ? `${allEmployees.find((e) => e.id === last.senderId)?.name.split(' ')[0] || 'Someone'}: ${last.text || (last.attachmentName ? 'Attachment' : 'Sent an attachment')}` : (group.description || `${group.memberIds.length} members`)}
                       </p>
                       {unread > 0 && (
                         <span className="ml-1 flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-[10px] font-bold text-white shrink-0 shadow-sm" style={{ backgroundColor: '#C9A96E' }}>
@@ -1379,20 +2038,38 @@ export default function Messages({
       <div className={`flex-1 flex-col min-w-0 ${selectedId ? 'flex' : 'hidden lg:flex'}`}>
         {selectedGroupConvo ? (
           <>
-            <div className="flex items-center gap-3 px-5 py-3.5 border-b border-border">
+            <div className="flex items-center gap-3 px-5 py-3 border-b border-border bg-card">
               <button onClick={() => setSelectedId(null)} className="lg:hidden p-1 -ml-1 text-muted-foreground">
                 <ArrowLeft size={18} />
               </button>
-              <button onClick={() => setShowGroupInfo(true)} className="flex items-center gap-3 min-w-0 flex-1 text-left">
-                <div
-                  className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
-                  style={{ backgroundColor: 'rgba(201,169,110,0.15)', color: '#C9A96E' }}
-                >
-                  <Users size={16} />
-                </div>
+              <button
+                onClick={() => setShowGroupInfo(true)}
+                className="flex items-center gap-3 min-w-0 flex-1 text-left group/head hover:opacity-95 transition-opacity"
+              >
+                {selectedGroupConvo.group.avatarUrl ? (
+                  <img
+                    src={selectedGroupConvo.group.avatarUrl}
+                    alt={selectedGroupConvo.group.name}
+                    className="w-10 h-10 rounded-full object-cover shrink-0 shadow-xs border border-border/50 ring-2 ring-transparent group-hover/head:ring-accent/40 transition-all"
+                  />
+                ) : (
+                  <div
+                    className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs text-white shrink-0 shadow-xs ring-2 ring-transparent group-hover/head:ring-accent/40 transition-all"
+                    style={{ background: getGroupGradient(selectedGroupConvo.group.name) }}
+                  >
+                    {getGroupInitials(selectedGroupConvo.group.name)}
+                  </div>
+                )}
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-foreground truncate">{selectedGroupConvo.group.name}</p>
-                  <p className="text-xs text-muted-foreground truncate">{selectedGroupConvo.group.memberIds.length} members · {groupMemberNames(selectedGroupConvo.group)}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-foreground truncate group-hover/head:text-accent transition-colors">
+                      {selectedGroupConvo.group.name}
+                    </p>
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {selectedGroupConvo.group.description ? `${selectedGroupConvo.group.description} · ` : ''}
+                    {selectedGroupConvo.group.memberIds.length} members · {groupMemberNames(selectedGroupConvo.group)}
+                  </p>
                 </div>
               </button>
               <button
@@ -1435,58 +2112,48 @@ export default function Messages({
 
             {tab === 'chat' && (
               <>
-                <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3" style={{ backgroundColor: '#FAF8F5' }}>
+                <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-2" style={{ backgroundColor: '#FAF8F5' }}>
                   {chatError ? (
                     <div className="text-xs text-red-600 bg-red-50 p-2.5 rounded-lg text-center mx-4">{chatError}</div>
                   ) : selectedGroupConvo.thread.length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center mt-8">No messages yet — say hello 👋</p>
-                  ) : null}
-                  {selectedGroupConvo.thread.map((m) => {
-                    const mine = m.senderId === activeEmployeeId
-                    const sender = allEmployees.find((e) => e.id === m.senderId)
-                    return (
-                      <div key={m.id} className={`group relative flex ${mine ? 'justify-end' : 'justify-start'}`}>
-                        <div
-                          className="relative max-w-[75%] sm:max-w-[60%] px-4 py-2.5 rounded-2xl text-sm"
-                          style={{
-                            backgroundColor: mine ? '#1C2B4A' : '#fff',
-                            color: mine ? '#FAF8F5' : '#1C2B4A',
-                            border: mine ? 'none' : '1px solid #E5DFD5',
-                            borderBottomRightRadius: mine ? 4 : undefined,
-                            borderBottomLeftRadius: !mine ? 4 : undefined,
-                          }}
-                        >
-                          {!mine && <p className="text-[11px] font-semibold mb-0.5" style={{ color: '#C9A96E' }}>{sender?.name}</p>}
-                          {m.attachmentUrl && (
-                            m.attachmentUrl.startsWith('data:image') ? (
-                              <img src={m.attachmentUrl} alt={m.attachmentName} className="rounded-lg mb-1.5 max-h-40 object-cover" />
-                            ) : (
-                              <div className="flex items-center gap-2 mb-1.5 px-2.5 py-2 rounded-lg" style={{ backgroundColor: mine ? 'rgba(255,255,255,0.1)' : '#F5F2EC' }}>
-                                <FileText size={14} />
-                                <span className="text-xs truncate">{m.attachmentName}</span>
-                              </div>
-                            )
-                          )}
-                          {m.text && <p className="leading-relaxed">{m.text}</p>}
-                          <div className="flex items-center justify-between gap-3 mt-1">
-                            <p className="text-[10px] opacity-60">{formatTime(m.timestamp)}</p>
-                            {mine && (
-                              <button
-                                onClick={() => setDeletingMessageId(m.id)}
-                                className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-white/60 hover:text-red-400"
-                                title="Delete message"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            )}
-                          </div>
-                        </div>
+                    <div className="flex flex-col items-center justify-center mt-12 text-center">
+                      <div
+                        className="w-16 h-16 rounded-full flex items-center justify-center font-bold text-lg text-white mb-3 shadow-md"
+                        style={{ background: getGroupGradient(selectedGroupConvo.group.name) }}
+                      >
+                        {getGroupInitials(selectedGroupConvo.group.name)}
                       </div>
-                    )
-                  })}
+                      <p className="text-sm font-semibold text-foreground">Welcome to {selectedGroupConvo.group.name}!</p>
+                      <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+                        {selectedGroupConvo.group.description || 'This is the start of your group discussion. Messages and calls are shared with all members.'}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-3">Say hello 👋</p>
+                    </div>
+                  ) : null}
+                  {selectedGroupConvo.thread.map((m) => renderMessageBubble(m, true))}
                 </div>
 
-                <div className="border-t border-border">
+                <div className="border-t border-border bg-card">
+                  {/* WhatsApp-style Replying Quote Preview */}
+                  {replyingToMessage && (
+                    <div className="flex items-center justify-between gap-3 px-4 py-2 bg-amber-50/70 border-b border-amber-200/60 text-xs">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-1 h-7 rounded-full bg-accent shrink-0" />
+                        <div className="min-w-0">
+                          <p className="font-semibold text-accent truncate">Replying to {replyingToMessage.replyToSenderName}</p>
+                          <p className="text-muted-foreground truncate text-[11px]">{replyingToMessage.replyToText}</p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setReplyingToMessage(null)}
+                        className="p-1 rounded-full text-muted-foreground hover:text-foreground hover:bg-black/5"
+                        title="Cancel reply"
+                      >
+                        <XIcon size={14} />
+                      </button>
+                    </div>
+                  )}
+
                   {pendingAttachment && (
                     <div className="flex items-center gap-2 px-3 pt-2.5">
                       <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted text-xs text-foreground">
@@ -1498,26 +2165,56 @@ export default function Messages({
                       </div>
                     </div>
                   )}
-                  <div className="p-3 flex items-center gap-2">
+
+                  <div className="p-3 flex items-center gap-2 relative">
                     <input ref={fileInputRef} type="file" className="hidden" onChange={handleFilePick} />
+
+                    {/* Emoji Picker Popover */}
+                    {showEmojiPicker && (
+                      <EmojiPicker
+                        onSelectEmoji={(emoji) => {
+                          setDraft((prev) => prev + emoji)
+                        }}
+                        onClose={() => setShowEmojiPicker(false)}
+                        position="top-left"
+                      />
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setShowEmojiPicker((prev) => !prev)}
+                      className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+                        showEmojiPicker
+                          ? 'bg-accent/20 text-accent'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                      }`}
+                      title="Emojis"
+                    >
+                      <Smile size={18} />
+                    </button>
+
                     <button
                       onClick={() => fileInputRef.current?.click()}
                       className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                      title="Attach file"
                     >
                       <Paperclip size={16} />
                     </button>
+
                     <input
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && send()}
+                      onKeyDown={(e) => e.key === 'Enter' && void send()}
                       placeholder={`Message ${selectedGroupConvo.group.name}`}
                       className="flex-1 px-4 py-2.5 rounded-full border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
                     />
+
                     <button
-                      onClick={send}
+                      onClick={() => void send()}
                       disabled={(!draft.trim() && !pendingAttachment) || sending}
                       className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-opacity"
                       style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: (draft.trim() || pendingAttachment) && !sending ? 1 : 0.4 }}
+                      title="Send message"
                     >
                       <Send size={16} />
                     </button>
@@ -1684,50 +2381,30 @@ export default function Messages({
                   ) : selected.thread.length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center mt-8">No messages yet — say hello 👋</p>
                   ) : null}
-                  {selected.thread.map((m) => {
-                    const mine = m.senderId === activeEmployeeId
-                    return (
-                      <div key={m.id} className={`group relative flex ${mine ? 'justify-end' : 'justify-start'}`}>
-                        <div
-                          className="relative max-w-[75%] sm:max-w-[60%] px-4 py-2.5 rounded-2xl text-sm"
-                          style={{
-                            backgroundColor: mine ? '#1C2B4A' : '#fff',
-                            color: mine ? '#FAF8F5' : '#1C2B4A',
-                            border: mine ? 'none' : '1px solid #E5DFD5',
-                            borderBottomRightRadius: mine ? 4 : undefined,
-                            borderBottomLeftRadius: !mine ? 4 : undefined,
-                          }}
-                        >
-                          {m.attachmentUrl && (
-                            m.attachmentUrl.startsWith('data:image') ? (
-                              <img src={m.attachmentUrl} alt={m.attachmentName} className="rounded-lg mb-1.5 max-h-40 object-cover" />
-                            ) : (
-                              <div className="flex items-center gap-2 mb-1.5 px-2.5 py-2 rounded-lg" style={{ backgroundColor: mine ? 'rgba(255,255,255,0.1)' : '#F5F2EC' }}>
-                                <FileText size={14} />
-                                <span className="text-xs truncate">{m.attachmentName}</span>
-                              </div>
-                            )
-                          )}
-                          {m.text && <p className="leading-relaxed">{m.text}</p>}
-                          <div className="flex items-center justify-between gap-3 mt-1">
-                            <p className="text-[10px] opacity-60">{formatTime(m.timestamp)}</p>
-                            {mine && (
-                              <button
-                                onClick={() => setDeletingMessageId(m.id)}
-                                className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-white/60 hover:text-red-400"
-                                title="Delete message"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
+                  {selected.thread.map((m) => renderMessageBubble(m, false))}
                 </div>
 
-                <div className="border-t border-border">
+                <div className="border-t border-border bg-card">
+                  {/* WhatsApp-style Replying Quote Preview */}
+                  {replyingToMessage && (
+                    <div className="flex items-center justify-between gap-3 px-4 py-2 bg-amber-50/70 border-b border-amber-200/60 text-xs">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-1 h-7 rounded-full bg-accent shrink-0" />
+                        <div className="min-w-0">
+                          <p className="font-semibold text-accent truncate">Replying to {replyingToMessage.replyToSenderName}</p>
+                          <p className="text-muted-foreground truncate text-[11px]">{replyingToMessage.replyToText}</p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setReplyingToMessage(null)}
+                        className="p-1 rounded-full text-muted-foreground hover:text-foreground hover:bg-black/5"
+                        title="Cancel reply"
+                      >
+                        <XIcon size={14} />
+                      </button>
+                    </div>
+                  )}
+
                   {pendingAttachment && (
                     <div className="flex items-center gap-2 px-3 pt-2.5">
                       <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted text-xs text-foreground">
@@ -1739,26 +2416,56 @@ export default function Messages({
                       </div>
                     </div>
                   )}
-                  <div className="p-3 flex items-center gap-2">
+
+                  <div className="p-3 flex items-center gap-2 relative">
                     <input ref={fileInputRef} type="file" className="hidden" onChange={handleFilePick} />
+
+                    {/* Emoji Picker Popover */}
+                    {showEmojiPicker && (
+                      <EmojiPicker
+                        onSelectEmoji={(emoji) => {
+                          setDraft((prev) => prev + emoji)
+                        }}
+                        onClose={() => setShowEmojiPicker(false)}
+                        position="top-left"
+                      />
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setShowEmojiPicker((prev) => !prev)}
+                      className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+                        showEmojiPicker
+                          ? 'bg-accent/20 text-accent'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                      }`}
+                      title="Emojis"
+                    >
+                      <Smile size={18} />
+                    </button>
+
                     <button
                       onClick={() => fileInputRef.current?.click()}
                       className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                      title="Attach file"
                     >
                       <Paperclip size={16} />
                     </button>
+
                     <input
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && send()}
+                      onKeyDown={(e) => e.key === 'Enter' && void send()}
                       placeholder="Type a message"
                       className="flex-1 px-4 py-2.5 rounded-full border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
                     />
+
                     <button
-                      onClick={send}
+                      onClick={() => void send()}
                       disabled={(!draft.trim() && !pendingAttachment) || sending}
                       className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-opacity"
                       style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: (draft.trim() || pendingAttachment) && !sending ? 1 : 0.4 }}
+                      title="Send message"
                     >
                       <Send size={16} />
                     </button>
@@ -2025,13 +2732,35 @@ export default function Messages({
 
               return (
                 <>
+                  {/* Group Avatar & Name Header */}
                   <div className="flex items-center gap-4">
-                    <div
-                      className="w-14 h-14 rounded-2xl flex items-center justify-center shrink-0"
-                      style={{ backgroundColor: 'rgba(201,169,110,0.15)', color: '#C9A96E' }}
-                    >
-                      <Users size={22} />
+                    <div className="relative group/avatar shrink-0">
+                      {selectedGroupConvo.group.avatarUrl ? (
+                        <img
+                          src={selectedGroupConvo.group.avatarUrl}
+                          alt={selectedGroupConvo.group.name}
+                          className="w-16 h-16 rounded-2xl object-cover shadow-sm border border-border"
+                        />
+                      ) : (
+                        <div
+                          className="w-16 h-16 rounded-2xl flex items-center justify-center font-bold text-lg text-white shadow-sm"
+                          style={{ background: getGroupGradient(selectedGroupConvo.group.name) }}
+                        >
+                          {getGroupInitials(selectedGroupConvo.group.name)}
+                        </div>
+                      )}
+                      {canManageThisGroup && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAvatarPickerModal(true)}
+                          className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-accent text-accent-foreground flex items-center justify-center shadow-md hover:scale-110 transition-transform"
+                          title="Change group avatar"
+                        >
+                          <Camera size={13} />
+                        </button>
+                      )}
                     </div>
+
                     <div className="flex-1 min-w-0">
                       {editingGroupName ? (
                         <div className="flex items-center gap-2">
@@ -2081,6 +2810,58 @@ export default function Messages({
                     </div>
                   </div>
 
+                  {/* Group Description Section */}
+                  <div className="p-3 rounded-xl bg-muted/30 border border-border/60">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Description</p>
+                      {canManageThisGroup && !editingGroupDescription && (
+                        <button
+                          onClick={() => {
+                            setEditGroupDescriptionInput(selectedGroupConvo.group.description || '')
+                            setEditingGroupDescription(true)
+                          }}
+                          className="flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+                        >
+                          <Edit2 size={11} /> {selectedGroupConvo.group.description ? 'Edit' : 'Add'}
+                        </button>
+                      )}
+                    </div>
+                    {editingGroupDescription ? (
+                      <div className="space-y-2 mt-1">
+                        <textarea
+                          rows={2}
+                          value={editGroupDescriptionInput}
+                          onChange={(e) => setEditGroupDescriptionInput(e.target.value)}
+                          placeholder="Add group description / channel purpose…"
+                          className="w-full px-3 py-2 text-xs rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-accent/30 resize-none"
+                          autoFocus
+                        />
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => setEditingGroupDescription(false)}
+                            className="px-2.5 py-1 rounded-lg text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => void handleSaveGroupDescription()}
+                            disabled={savingGroupDescription}
+                            className="px-3 py-1 rounded-lg text-xs font-semibold text-white transition-opacity disabled:opacity-50"
+                            style={{ backgroundColor: '#1C2B4A' }}
+                          >
+                            {savingGroupDescription ? 'Saving…' : 'Save'}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-foreground/90 whitespace-pre-wrap leading-relaxed">
+                        {selectedGroupConvo.group.description || (
+                          <span className="text-muted-foreground italic">No group description provided.</span>
+                        )}
+                      </p>
+                    )}
+                  </div>
+
                   <div className="flex gap-2">
                     <button
                       onClick={() => { setShowGroupInfo(false); startGroupCall(selectedGroupConvo.group.id, 'voice') }}
@@ -2122,37 +2903,76 @@ export default function Messages({
                         </button>
                       )}
                     </div>
+
+                    {/* Member Search filter */}
+                    {selectedGroupConvo.group.memberIds.length > 5 && (
+                      <div className="relative mb-2">
+                        <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                        <input
+                          type="text"
+                          value={memberSearchQuery}
+                          onChange={(e) => setMemberSearchQuery(e.target.value)}
+                          placeholder="Search members…"
+                          className="w-full pl-7 pr-3 py-1.5 text-xs rounded-lg border border-border bg-background focus:outline-none focus:ring-1 focus:ring-accent/40"
+                        />
+                      </div>
+                    )}
+
                     <div className="space-y-1 max-h-60 overflow-y-auto">
-                      {selectedGroupConvo.group.memberIds.map((id) => {
-                        const member = allEmployees.find((e) => e.id === id)
-                        if (!member) return null
-                        const isYou = id === activeEmployeeId
-                        const isMemberCreator = id === selectedGroupConvo.group.createdBy
-                        const isMemberChaitra = member.role === 'admin' || member.email === 'chaitra@parvarealty.ae'
-                        return (
-                          <div key={id} className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-muted/30 transition-colors">
-                            <div
-                              className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
-                              style={{ backgroundColor: 'rgba(28,43,74,0.1)', color: '#1C2B4A' }}
-                            >
-                              {initials(member.name)}
+                      {selectedGroupConvo.group.memberIds
+                        .filter((id) => {
+                          if (!memberSearchQuery.trim()) return true
+                          const emp = allEmployees.find((e) => e.id === id)
+                          const q = memberSearchQuery.toLowerCase()
+                          return (
+                            emp?.name?.toLowerCase().includes(q) ||
+                            emp?.email?.toLowerCase().includes(q) ||
+                            emp?.role?.toLowerCase().includes(q) ||
+                            emp?.team?.toLowerCase().includes(q)
+                          )
+                        })
+                        .map((id) => {
+                          const member = allEmployees.find((e) => e.id === id)
+                          if (!member) return null
+                          const isYou = id === activeEmployeeId
+                          const isMemberCreator = id === selectedGroupConvo.group.createdBy
+                          const isMemberChaitra = member.role === 'admin' || member.email === 'chaitra@parvarealty.ae'
+                          const canRemoveThisUser = canManageThisGroup && !isMemberCreator && !isYou
+
+                          return (
+                            <div key={id} className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-muted/30 transition-colors">
+                              <div
+                                className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
+                                style={{ backgroundColor: 'rgba(28,43,74,0.1)', color: '#1C2B4A' }}
+                              >
+                                {initials(member.name)}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-foreground truncate">{member.name} {isYou && <span className="text-muted-foreground font-normal">(you)</span>}</p>
+                                <p className="text-xs text-muted-foreground capitalize truncate">{member.role} · {member.team}</p>
+                              </div>
+                              {isMemberCreator ? (
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: 'rgba(201,169,110,0.12)', color: '#C9A96E' }}>
+                                  Creator
+                                </span>
+                              ) : isMemberChaitra ? (
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: 'rgba(28,43,74,0.1)', color: '#1C2B4A' }}>
+                                  Admin
+                                </span>
+                              ) : null}
+                              {canRemoveThisUser && (
+                                <button
+                                  type="button"
+                                  onClick={() => setRemovingMemberId(id)}
+                                  className="p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-50 transition-colors"
+                                  title={`Remove ${member.name} from group`}
+                                >
+                                  <UserMinus size={14} />
+                                </button>
+                              )}
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-foreground truncate">{member.name} {isYou && <span className="text-muted-foreground font-normal">(you)</span>}</p>
-                              <p className="text-xs text-muted-foreground capitalize truncate">{member.role} · {member.team}</p>
-                            </div>
-                            {isMemberCreator ? (
-                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: 'rgba(201,169,110,0.12)', color: '#C9A96E' }}>
-                                Creator
-                              </span>
-                            ) : isMemberChaitra ? (
-                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: 'rgba(28,43,74,0.1)', color: '#1C2B4A' }}>
-                                Admin
-                              </span>
-                            ) : null}
-                          </div>
-                        )
-                      })}
+                          )
+                        })}
                     </div>
                   </div>
 
@@ -2184,6 +3004,105 @@ export default function Messages({
             })()}
           </div>
         )}
+      </Modal>
+
+      {/* Group Avatar Picker Modal */}
+      <Modal
+        open={showAvatarPickerModal && !!selectedGroupConvo}
+        onClose={() => setShowAvatarPickerModal(false)}
+        title="Change Group Icon / Avatar"
+      >
+        <div className="space-y-4">
+          <input
+            ref={groupAvatarFileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleAvatarFilePick}
+          />
+
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-2">Upload Custom Image</p>
+            <button
+              type="button"
+              onClick={() => groupAvatarFileInputRef.current?.click()}
+              disabled={savingGroupAvatar}
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-dashed border-accent/60 bg-accent/5 hover:bg-accent/10 transition-colors text-sm font-semibold text-foreground"
+            >
+              <Camera size={18} className="text-accent" />
+              <span>{savingGroupAvatar ? 'Uploading…' : 'Choose Photo from Device'}</span>
+            </button>
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-2">Or Choose a Luxury Theme Avatar</p>
+            <div className="grid grid-cols-3 gap-2.5">
+              {PRESET_GROUP_AVATARS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => {
+                    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><rect width="120" height="120" rx="30" fill="${preset.id === 'dubai_skyline' ? '#1C2B4A' : preset.id === 'luxury_villa' ? '#8C6D32' : preset.id === 'palm_oasis' ? '#065F46' : preset.id === 'deal_closing' ? '#4C1D95' : preset.id === 'golden_key' ? '#B45309' : '#991B1B'}"/><text x="60" y="72" font-size="52" text-anchor="middle" dominant-baseline="middle">${preset.emoji}</text></svg>`
+                    const dataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
+                    void handleSaveGroupAvatar(dataUrl)
+                  }}
+                  className="flex flex-col items-center gap-1.5 p-3 rounded-xl border border-border hover:border-accent hover:bg-muted/30 transition-all text-center"
+                >
+                  <div
+                    className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl shadow-xs"
+                    style={{ background: preset.bg }}
+                  >
+                    {preset.emoji}
+                  </div>
+                  <span className="text-[11px] font-medium text-foreground truncate w-full">
+                    {preset.label}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => setShowAvatarPickerModal(false)}
+              className="w-full py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Remove Member Confirmation Modal */}
+      <Modal
+        open={!!removingMemberId && !!selectedGroupConvo}
+        onClose={() => setRemovingMemberId(null)}
+        title="Remove Member from Group?"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Are you sure you want to remove{' '}
+            <span className="font-semibold text-foreground">
+              {allEmployees.find((e) => e.id === removingMemberId)?.name || 'this member'}
+            </span>{' '}
+            from <span className="font-semibold text-foreground">"{selectedGroupConvo?.group.name}"</span>? They will no longer receive group messages.
+          </p>
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => setRemovingMemberId(null)}
+              className="flex-1 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => void handleRemoveMember()}
+              disabled={removingMemberLoading}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white bg-red-600 hover:bg-red-700 transition-colors disabled:opacity-50"
+            >
+              {removingMemberLoading ? 'Removing…' : 'Remove Member'}
+            </button>
+          </div>
+        </div>
       </Modal>
 
       {/* Add Members to Group Modal */}

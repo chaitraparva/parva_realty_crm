@@ -7,6 +7,7 @@ const router = express.Router()
 
 router.post('/login', asyncHandler(ctrl.login))
 router.get('/me', protect, ctrl.me)
+router.patch('/avatar', protect, asyncHandler(ctrl.updateAvatar))
 router.patch('/change-password', protect, asyncHandler(ctrl.changePassword))
 
 module.exports = router
