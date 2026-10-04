@@ -68,7 +68,7 @@ import {
   type GroupUpdateSignalPayload,
   type MessageSubscriptionHandle,
 } from '../services/chatService'
-import { markConversationNotificationsAsRead } from '../services/notificationService'
+import { markConversationNotificationsAsRead, sendCallNotifications } from '../services/notificationService'
 import type { Dispatch, SetStateAction } from 'react'
 
 type Tab = 'chat' | 'calls' | 'email'
@@ -455,6 +455,9 @@ interface MessagesProps {
   currentUserId: string
   initialContactId?: string
   initialGroupId?: string
+  /** A call the user already accepted from the app-wide popup — join it on arrival. */
+  autoAcceptSignal?: CallSignalPayload | null
+  onAutoAcceptHandled?: () => void
   // These props are retained so App.tsx does not need a large UI rewrite.
   groupList?: any[]
   setGroupList?: Dispatch<SetStateAction<any[]>>
@@ -473,6 +476,8 @@ export default function Messages({
   currentUserId,
   initialContactId,
   initialGroupId,
+  autoAcceptSignal = null,
+  onAutoAcceptHandled,
   groupList = [],
   callLogsList = [],
   setCallLogsList = () => { },
@@ -1506,6 +1511,14 @@ export default function Messages({
     setActiveConversationId(conversationId)
     setActiveCallId(callId)
 
+    void sendCallNotifications({
+      callerId: activeEmployeeId,
+      callerName,
+      callType: type,
+      isGroup: false,
+      recipientIds: [contactId],
+    })
+
     void broadcastCallSignal('call:ring', {
       callId,
       callerId: activeEmployeeId,
@@ -1529,6 +1542,16 @@ export default function Messages({
     setActiveCallGroupId(groupId)
     setActiveConversationId(conversationId)
     setActiveCallId(callId)
+
+    void sendCallNotifications({
+      callerId: activeEmployeeId,
+      callerName,
+      callType: type,
+      isGroup: true,
+      groupId,
+      groupName: group?.name,
+      recipientIds: group?.memberIds || [],
+    })
 
     void broadcastCallSignal('call:ring', {
       callId,
@@ -1583,6 +1606,26 @@ export default function Messages({
       callType: sig.callType,
     }).catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incomingSignal])
+
+  // Accepted from the app-wide incoming-call popup on another screen: join now.
+  useEffect(() => {
+    if (!autoAcceptSignal) return
+    setIncomingSignal(autoAcceptSignal)
+    onAutoAcceptHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoAcceptSignal])
+
+  const autoAcceptPendingRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (autoAcceptSignal) autoAcceptPendingRef.current = autoAcceptSignal.callId
+  }, [autoAcceptSignal])
+  useEffect(() => {
+    if (incomingSignal && autoAcceptPendingRef.current === incomingSignal.callId) {
+      autoAcceptPendingRef.current = null
+      acceptCall()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomingSignal])
 
   const handleEmailFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2805,7 +2848,7 @@ export default function Messages({
                         </div>
                       )}
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Created {selectedGroupConvo.group.createdAt} by {allEmployees.find((e) => e.id === selectedGroupConvo.group.createdBy)?.name || 'Unknown'}
+                        Created {(() => { const d = new Date(selectedGroupConvo.group.createdAt); return isNaN(d.getTime()) ? selectedGroupConvo.group.createdAt : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) })()} by {allEmployees.find((e) => e.id === selectedGroupConvo.group.createdBy)?.name || 'Unknown'}
                       </p>
                     </div>
                   </div>

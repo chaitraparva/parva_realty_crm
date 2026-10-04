@@ -260,6 +260,50 @@ export async function sendChatMessageNotifications(
     }
 }
 
+export interface SendCallNotificationParams {
+    callerId: string
+    callerName: string
+    callType: 'voice' | 'video'
+    isGroup: boolean
+    groupId?: string
+    groupName?: string | null
+    recipientIds: string[]
+}
+
+/**
+ * Puts an "incoming call" alert in each recipient's notifications, so a call is
+ * still visible (as a missed call) if they were not on a screen that rings.
+ */
+export async function sendCallNotifications(params: SendCallNotificationParams): Promise<void> {
+    try {
+        const recipients = params.recipientIds.filter((id) => id && id !== params.callerId)
+        if (recipients.length === 0) return
+        const kind = params.callType === 'video' ? 'video' : 'voice'
+        const title = params.isGroup
+            ? `${params.groupName || 'Group'} ${kind} call`
+            : `${params.callerName} is calling you`
+        const message = params.isGroup
+            ? `${params.callerName} started a ${kind} call`
+            : `Incoming ${kind} call`
+        const link = params.isGroup
+            ? `messages?groupId=${params.groupId}`
+            : `messages?employeeId=${params.callerId}`
+        const rows = recipients.map((recipientId) => ({
+            id: crypto.randomUUID(),
+            employee_id: recipientId,
+            type: 'chat_message',
+            title,
+            message,
+            is_read: false,
+            link,
+        }))
+        const { error } = await supabase.from('notifications').insert(rows)
+        if (error) console.error('Failed to send call notifications:', error.message)
+    } catch (err) {
+        console.error('Unexpected error in sendCallNotifications:', err)
+    }
+}
+
 /**
  * Marks incoming chat notifications corresponding to a conversation as read.
  */

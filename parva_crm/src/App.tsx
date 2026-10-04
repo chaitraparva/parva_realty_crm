@@ -17,6 +17,12 @@ import type {
 import { supabase } from './lib/supabase'
 import { getCurrentEmployee } from './services/chatService'
 import {
+  subscribeToCallSignals,
+  broadcastCallSignal,
+  type CallSignalPayload,
+} from './services/livekitCallService'
+import IncomingCall from './components/calls/IncomingCall'
+import {
   fetchUserNotifications,
   markNotificationAsRead,
   markAllNotificationsAsRead,
@@ -213,6 +219,11 @@ function AuthenticatedApp({
     showOnboarding,
     setShowOnboarding,
   ] = useState(false)
+
+  // Incoming calls while the user is on any screen other than Messages
+  // (Messages has its own listener). Accepting jumps to Messages and joins.
+  const [incomingCall, setIncomingCall] = useState<CallSignalPayload | null>(null)
+  const [pendingAccept, setPendingAccept] = useState<CallSignalPayload | null>(null)
 
   const [
     darkMode,
@@ -426,6 +437,44 @@ function AuthenticatedApp({
       void supabase.removeChannel(channel)
     }
   }, [currentUser.id])
+
+  useEffect(() => {
+    if (!currentUser.id || screen === 'messages') {
+      setIncomingCall(null)
+      return
+    }
+    const unsub = subscribeToCallSignals(currentUser.id, [], (event, payload) => {
+      if (event === 'call:ring') {
+        setIncomingCall((prev) => prev ?? payload)
+      } else if (event === 'call:cancel' || event === 'call:end') {
+        setIncomingCall((prev) => (prev && prev.callId === payload.callId ? null : prev))
+      }
+    })
+    return unsub
+  }, [currentUser.id, screen])
+
+  const acceptIncomingCall = () => {
+    if (!incomingCall) return
+    const sig = incomingCall
+    setIncomingCall(null)
+    setPendingAccept(sig)
+    navigate('messages', sig.isGroup ? { groupId: sig.calleeId } : { employeeId: sig.callerId })
+  }
+
+  const declineIncomingCall = () => {
+    if (!incomingCall) return
+    const sig = incomingCall
+    setIncomingCall(null)
+    void broadcastCallSignal('call:decline', {
+      callId: sig.callId,
+      callerId: sig.callerId,
+      callerName: sig.callerName,
+      calleeId: sig.calleeId,
+      isGroup: sig.isGroup,
+      conversationId: sig.conversationId,
+      callType: sig.callType,
+    }).catch(() => {})
+  }
 
   const handleMarkRead = (id: string) => {
     setNotifs((prev) =>
@@ -1081,6 +1130,8 @@ function AuthenticatedApp({
               initialGroupId={
                 params.groupId
               }
+              autoAcceptSignal={pendingAccept}
+              onAutoAcceptHandled={() => setPendingAccept(null)}
               groupList={
                 groupList
               }
@@ -1293,6 +1344,14 @@ function AuthenticatedApp({
         )}
 
       </Layout>
+
+      {incomingCall && screen !== 'messages' && (
+        <IncomingCall
+          signal={incomingCall}
+          onAccept={acceptIncomingCall}
+          onDecline={declineIncomingCall}
+        />
+      )}
     </div>
   )
 }

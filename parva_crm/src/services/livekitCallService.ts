@@ -104,14 +104,38 @@ export async function broadcastCallSignal(
   event: SignalEvent,
   payload: Partial<CallSignalPayload> & { callId: string }
 ): Promise<void> {
+  // supabase.channel() returns the SAME channel object for the same topic. This
+  // client is normally already listening on 'call-signals', so re-subscribing
+  // would never fire SUBSCRIBED (the old code then waited forever and the ring
+  // was never sent), and removing it afterwards would silence our own listener.
+  // So: reuse the live channel if there is one; only create+clean up a
+  // temporary channel when nothing is listening yet.
+  const existing = supabase.getChannels().find((c) => c.topic === 'realtime:call-signals')
+  if (existing) {
+    const result = await existing.send({ type: 'broadcast', event, payload })
+    if (result !== 'ok') throw new Error(`Call signal "${event}" failed (${result})`)
+    return
+  }
+
   const channel = supabase.channel('call-signals')
-  await new Promise<void>((resolve) => {
-    channel.subscribe((status) => {
-      if (status === 'SUBSCRIBED') resolve()
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Call signalling timed out')), 8000)
+      channel.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          clearTimeout(timer)
+          resolve()
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          clearTimeout(timer)
+          reject(new Error(`Call signalling ${status}`))
+        }
+      })
     })
-  })
-  await channel.send({ type: 'broadcast', event, payload })
-  supabase.removeChannel(channel)
+    const result = await channel.send({ type: 'broadcast', event, payload })
+    if (result !== 'ok') throw new Error(`Call signal "${event}" failed (${result})`)
+  } finally {
+    void supabase.removeChannel(channel)
+  }
 }
 
 /**
