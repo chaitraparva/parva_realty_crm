@@ -2772,6 +2772,8 @@ export default function Messages({
               const isChaitraMember = isChaitraAdmin && selectedGroupConvo.group.memberIds.includes(activeEmployeeId)
               const canManageThisGroup = isCurrentCreator || isChaitraMember
               const canDeleteThisGroup = isCurrentCreator || isChaitraMember
+              // Any member may change the group's name, description and icon.
+              const canEditGroupProfile = selectedGroupConvo.group.memberIds.includes(activeEmployeeId)
 
               return (
                 <>
@@ -2792,7 +2794,7 @@ export default function Messages({
                           {getGroupInitials(selectedGroupConvo.group.name)}
                         </div>
                       )}
-                      {canManageThisGroup && (
+                      {canEditGroupProfile && (
                         <button
                           type="button"
                           onClick={() => setShowAvatarPickerModal(true)}
@@ -2833,7 +2835,7 @@ export default function Messages({
                       ) : (
                         <div className="flex items-center gap-2">
                           <h3 className="font-serif text-lg font-semibold text-foreground truncate">{selectedGroupConvo.group.name}</h3>
-                          {canManageThisGroup && (
+                          {canEditGroupProfile && (
                             <button
                               onClick={() => {
                                 setEditGroupNameInput(selectedGroupConvo.group.name)
@@ -2857,7 +2859,7 @@ export default function Messages({
                   <div className="p-3 rounded-xl bg-muted/30 border border-border/60">
                     <div className="flex items-center justify-between mb-1">
                       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Description</p>
-                      {canManageThisGroup && !editingGroupDescription && (
+                      {canEditGroupProfile && !editingGroupDescription && (
                         <button
                           onClick={() => {
                             setEditGroupDescriptionInput(selectedGroupConvo.group.description || '')
