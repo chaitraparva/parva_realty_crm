@@ -40,7 +40,7 @@ export default function FlagsAdmin({ flagList, setFlagList }: FlagsAdminProps) {
         <div className="p-5 border-b border-border flex items-center justify-between">
           <div>
             <h3 className="font-serif text-lg font-semibold text-foreground">Company-wide Flags & Warnings</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">All teams — 2024</p>
+            <p className="text-xs text-muted-foreground mt-0.5">All teams — {new Date().getFullYear()}</p>
           </div>
           <div className="flex gap-2">
             {(['All', 'Open', 'Acknowledged', 'Resolved'] as const).map((f) => (
