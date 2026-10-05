@@ -384,7 +384,8 @@ export default function SiteVisits({
 
       leadName:
         lead?.name ||
-        'Unknown Lead',
+        row.location ||
+        '',
 
       projectName:
         row.location ||
@@ -724,7 +725,6 @@ export default function SiteVisits({
         )
 
       if (
-        !lead ||
         !project ||
         !form.date ||
         !form.time
@@ -791,7 +791,7 @@ export default function SiteVisits({
             crypto.randomUUID(),
 
           lead_id:
-            lead.id,
+            lead?.id ?? null,
 
           employee_id:
             employeeId,
@@ -871,7 +871,7 @@ export default function SiteVisits({
           title:
             'Site Visit Delegated',
           message:
-            `Sent to ${manager?.name || 'manager'} to assign an agent — ${lead.name} at ${project.name} on ${form.date}`,
+            `Sent to ${manager?.name || 'manager'} to assign an agent — ${lead ? lead.name + ' at ' : ''}${project.name} on ${form.date}`,
           priority:
             'low',
           forUserId:
@@ -884,7 +884,7 @@ export default function SiteVisits({
           title:
             'Site Visit Scheduled',
           message:
-            `${lead.name} — ${project.name} on ${form.date} at ${form.time}`,
+            `${lead ? lead.name + ' — ' : ''}${project.name} on ${form.date} at ${form.time}`,
           priority:
             'low',
           forUserId:
@@ -1560,54 +1560,6 @@ export default function SiteVisits({
 
         <div className="space-y-4">
 
-          {/* LEAD */}
-
-          <div>
-
-            <label className="block text-xs font-medium text-muted-foreground mb-1.5">
-              Lead
-            </label>
-
-            <select
-              value={
-                form.leadId
-              }
-              disabled={
-                saving
-              }
-              onChange={(
-                e
-              ) =>
-                setForm({
-                  ...form,
-                  leadId:
-                    e.target
-                      .value,
-                })
-              }
-              className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
-            >
-
-              <option value="">
-                Select a lead
-              </option>
-
-              {eligibleLeads.map(
-                (l) => (
-                  <option
-                    key={l.id}
-                    value={l.id}
-                  >
-                    {l.name} —{' '}
-                    {l.location}
-                  </option>
-                )
-              )}
-
-            </select>
-
-          </div>
-
           {/* PROJECT */}
 
           <div>
@@ -1814,7 +1766,6 @@ export default function SiteVisits({
               }
               disabled={
                 saving ||
-                !form.leadId ||
                 !form.projectId ||
                 !form.date ||
                 !form.time ||
@@ -1830,7 +1781,6 @@ export default function SiteVisits({
                   '#FAF8F5',
                 opacity:
                   saving ||
-                    !form.leadId ||
                     !form.projectId ||
                     !form.date ||
                     !form.time ||
