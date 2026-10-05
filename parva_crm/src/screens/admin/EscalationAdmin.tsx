@@ -67,6 +67,8 @@ export default function EscalationAdmin({ escalations, setEscalations, leads, se
         forUserId: esc.requesterId,
       })
     } else if (action === 'rejected') {
+      leadsApi.update(esc.leadId, { escalationStatus: 'reviewed', escalationComment: adminComment })
+        .catch((err) => setActionError(err instanceof ApiError ? err.message : 'Decision could not be saved — please retry.'))
       onAddAudit('Escalation Rejected', `Escalation request for "${esc.leadName}" by ${esc.requesterName} was rejected. Admin comment: ${adminComment}`, '', '', esc.reason)
       onAddNotification({
         type: 'escalation',

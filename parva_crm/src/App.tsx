@@ -810,6 +810,36 @@ function AuthenticatedApp({
     ).length +
     unreadGroupMessages
 
+  /*
+   * Rebuild the escalation list from the saved leads so it
+   * survives a refresh / new login (the lead rows hold the
+   * escalation reason, status and admin comment in Supabase).
+   */
+  useEffect(() => {
+    setEscalations((prev) => {
+      const known = new Set(prev.map((e) => e.leadId))
+      const restored: EscalationRequest[] = leadList
+        .filter((l) => !!l.escalationReason && !known.has(l.id))
+        .map((l) => ({
+          id: `esc-${l.id}`,
+          leadId: l.id,
+          leadName: l.name,
+          requesterId: l.assignedTo,
+          requesterName: l.agentName || '',
+          reason: l.escalationReason || '',
+          requestedAt: (l.escalatedAt || l.createdAt || '').slice(0, 16).replace('T', ' '),
+          status:
+            l.escalationStatus === 'reassigned'
+              ? 'reassigned'
+              : l.escalationStatus === 'reviewed'
+                ? 'rejected'
+                : 'pending',
+          adminComment: l.escalationComment,
+        }))
+      return restored.length ? [...prev, ...restored] : prev
+    })
+  }, [leadList])
+
   const pendingEscalations =
     escalations.filter(
       (item) =>
