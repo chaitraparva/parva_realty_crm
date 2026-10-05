@@ -1751,7 +1751,7 @@ export default function SiteVisits({
                   <option
                     value={currentUserId}
                   >
-                    Myself (I will go)
+                    {employees.find((e) => e.id === currentUserId)?.name || 'Chaitra'}
                   </option>
 
                   {managers.map(
