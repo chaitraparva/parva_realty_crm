@@ -8,7 +8,7 @@ import Modal from '../../components/ui/Modal'
 import SignaturePad from '../../components/ui/SignaturePad'
 import { getLeadScore, findDuplicatePhones } from '../../utils/leadScore'
 import { PIPELINE_STAGES, FINAL_STAGE, FIRST_STAGE } from '../../utils/pipeline'
-import { rankCandidates, getCapacityPct } from '../../utils/aiAssignment'
+import { getWorkloadStatus, getCapacityPct } from '../../utils/aiAssignment'
 import type { LeadStatus, ActivityType, Notification, EscalationRequest } from '../../types'
 
 const statuses: LeadStatus[] = PIPELINE_STAGES
@@ -109,10 +109,17 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
     return () => { active = false }
   }, [])
 
-  const dubaiAgents = employees.filter(
-    (e) => e.office === 'Dubai' && e.status === 'active' && e.role !== 'admin'
-  )
-  const dubaiRanked = rankCandidates(dubaiAgents, { office: 'Dubai' })
+  // Everyone active in the Dubai office can receive a transfer (Dubai staff are
+  // Sales Managers/Executives — not only the 'agent' role), least-loaded first.
+  const dubaiRanked = employees
+    .filter((e) => e.office === 'Dubai' && e.status === 'active' && e.role !== 'admin')
+    .map((e) => ({
+      employee: e,
+      status: getWorkloadStatus(e),
+      // Leads already handed to this person from Bangalore.
+      transferredIn: leads.filter((l) => l.assignedTo === e.id && !!l.transferredFrom).length,
+    }))
+    .sort((a, b) => (a.employee.leadsAssigned ?? 0) - (b.employee.leadsAssigned ?? 0))
 
   const lead = { ...baseLead, status, activities, followUpDate, cancellationReason }
 
@@ -861,7 +868,7 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
                       )}
                       <p className="text-sm font-medium text-foreground">{r.employee.name}</p>
                     </div>
-                    <p className="text-xs text-muted-foreground">{r.employee.office} · {r.employee.leadsAssigned ?? 0}/{r.employee.capacityLimit ?? 35} leads</p>
+                    <p className="text-xs text-muted-foreground">{r.employee.office} · {r.employee.leadsAssigned ?? 0}/{r.employee.capacityLimit ?? 35} leads · {r.transferredIn} transferred</p>
                   </div>
                   <WorkloadBadge status={r.status} pct={getCapacityPct(r.employee)} />
                 </label>

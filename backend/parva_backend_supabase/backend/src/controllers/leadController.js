@@ -47,7 +47,9 @@ function toPublic(l) {
 function scopedQuery(user) {
   let q = supabaseAdmin.from('leads').select(SELECT)
   if (user.role === 'agent') q = q.eq('assigned_to', user.id)
-  else if (user.role === 'manager') q = q.eq('office_id', user.officeId)
+  // A manager sees their own office's leads, plus any lead they transferred to
+  // another office (so Bangalore can still see its Dubai hand-overs).
+  else if (user.role === 'manager') q = q.or(`office_id.eq.${user.officeId},transferred_from.eq.${user.id}`)
   return q
 }
 
@@ -128,6 +130,7 @@ exports.update = async (req, res) => {
     cancellationReason: 'cancellation_reason', previousStatus: 'previous_status',
     escalationReason: 'escalation_reason', escalationStatus: 'escalation_status',
     escalationComment: 'escalation_comment', aiAssigned: 'ai_assigned',
+    transferredFrom: 'transferred_from',
   }
   for (const [k, col] of Object.entries(map)) if (b[k] !== undefined) patch[col] = b[k]
 
@@ -153,13 +156,53 @@ exports.addActivity = async (req, res) => {
   res.json(toPublic(data))
 }
 
-// PATCH /api/leads/:id/assign — admin/manager only
+// PATCH /api/leads/:id/assign — admin/manager only.
+// The lead moves to the assignee's office too, so a Dubai employee actually
+// sees a lead transferred from Bangalore, and the assignee is notified.
 exports.assign = async (req, res) => {
   const { assignedTo } = req.body
+  if (!assignedTo) return res.status(400).json({ message: 'assignedTo is required' })
+
+  const { data: assignee, error: assigneeError } = await supabaseAdmin
+    .from('employees').select('id, name, office_id, status').eq('id', assignedTo).maybeSingle()
+  if (assigneeError) return res.status(500).json({ message: assigneeError.message })
+  if (!assignee || assignee.status === 'inactive') {
+    return res.status(400).json({ message: 'That employee is not active' })
+  }
+
+  const { data: existing, error: findError } = await supabaseAdmin
+    .from('leads').select('id, name, office_id, assigned_to').eq('id', req.params.id).maybeSingle()
+  if (findError) return res.status(500).json({ message: findError.message })
+  if (!existing) return res.status(404).json({ message: 'Lead not found' })
+  if (req.user.role === 'manager' && existing.office_id !== req.user.officeId) {
+    return res.status(403).json({ message: 'Access denied' })
+  }
+
+  const patch = { assigned_to: assignee.id }
+  if (assignee.office_id) patch.office_id = assignee.office_id
+
   const { data, error } = await supabaseAdmin
-    .from('leads').update({ assigned_to: assignedTo }).eq('id', req.params.id).select(SELECT).maybeSingle()
+    .from('leads').update(patch).eq('id', req.params.id).select(SELECT).maybeSingle()
   if (error) return res.status(400).json({ message: error.message })
   if (!data) return res.status(404).json({ message: 'Lead not found' })
+
+  // Notify the new owner (never the person who did the assigning).
+  if (assignee.id !== req.user.id && existing.assigned_to !== assignee.id) {
+    const crossOffice = assignee.office_id && existing.office_id !== assignee.office_id
+    const { error: notifError } = await supabaseAdmin.from('notifications').insert({
+      id: require('crypto').randomUUID(),
+      employee_id: assignee.id,
+      type: crossOffice ? 'lead-transfer' : 'unassigned-lead',
+      title: crossOffice ? 'Lead transferred to you' : 'New lead assigned to you',
+      message: crossOffice
+        ? `${existing.name} was transferred to you by ${req.user.name} for the Dubai Paperwork stage.`
+        : `${existing.name} was assigned to you by ${req.user.name}.`,
+      is_read: false,
+      link: `lead-detail:${existing.id}`,
+    })
+    if (notifError) console.error('Failed to create assignment notification:', notifError.message)
+  }
+
   res.json(toPublic(data))
 }
 
