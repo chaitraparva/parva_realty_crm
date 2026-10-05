@@ -96,6 +96,7 @@ type DbSiteVisit = {
   visit_time: string | null
   status: string
   location: string | null
+  place: string | null
   notes: string | null
   created_at: string
   updated_at: string
@@ -186,6 +187,7 @@ export default function SiteVisits({
     date: '',
     time: '',
     managerId: '',
+    place: '',
   })
 
   const [
@@ -420,6 +422,9 @@ export default function SiteVisits({
           ? assignedEmployee?.name
           : undefined,
 
+      place:
+        row.place || undefined,
+
       date:
         row.visit_date,
 
@@ -459,6 +464,7 @@ export default function SiteVisits({
           visit_time,
           status,
           location,
+          place,
           notes,
           created_at,
           updated_at
@@ -769,7 +775,9 @@ export default function SiteVisits({
           form.managerId
 
         status =
-          'Pending Assignment'
+          form.managerId === currentUserId
+            ? 'Scheduled'
+            : 'Pending Assignment'
       }
 
       /*
@@ -807,6 +815,9 @@ export default function SiteVisits({
           location:
             project.name,
 
+          place:
+            form.place.trim() || null,
+
           notes: null,
         })
         .select(`
@@ -817,6 +828,7 @@ export default function SiteVisits({
           visit_time,
           status,
           location,
+          place,
           notes,
           created_at,
           updated_at
@@ -856,7 +868,8 @@ export default function SiteVisits({
       )
 
       if (
-        role === 'admin'
+        role === 'admin' &&
+        form.managerId !== currentUserId
       ) {
         const manager =
           employees.find(
@@ -898,6 +911,7 @@ export default function SiteVisits({
         date: '',
         time: '',
         managerId: '',
+        place: '',
       })
 
       setShowModal(false)
@@ -967,6 +981,7 @@ export default function SiteVisits({
           visit_time,
           status,
           location,
+          place,
           notes,
           created_at,
           updated_at
@@ -1144,6 +1159,7 @@ export default function SiteVisits({
 
                       <p className="text-xs text-muted-foreground">
                         {v.projectName}{' '}
+                        {v.place ? `· ${v.place} ` : ''}
                         · {v.date}{' '}
                         at {v.time}
                       </p>
@@ -1465,6 +1481,9 @@ export default function SiteVisits({
                           {
                             v.projectName
                           }
+                          {v.place
+                            ? ` · ${v.place}`
+                            : ''}
                         </span>
 
                         <span className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -1671,6 +1690,30 @@ export default function SiteVisits({
 
           </div>
 
+          {/* PLACE */}
+
+          <div>
+
+            <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+              Place
+            </label>
+
+            <input
+              type="text"
+              value={form.place}
+              disabled={saving}
+              placeholder="e.g. Site address / meeting point"
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  place: e.target.value,
+                })
+              }
+              className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
+            />
+
+          </div>
+
           {/* ADMIN -> MANAGER */}
 
           {role ===
@@ -1678,7 +1721,7 @@ export default function SiteVisits({
               <div>
 
                 <label className="block text-xs font-medium text-muted-foreground mb-1.5">
-                  Assign to Manager (they'll pick the agent)
+                  Assign to (a manager picks the agent, or choose yourself)
                 </label>
 
                 <select
@@ -1703,6 +1746,12 @@ export default function SiteVisits({
 
                   <option value="">
                     Select a manager
+                  </option>
+
+                  <option
+                    value={currentUserId}
+                  >
+                    Myself (I will go)
                   </option>
 
                   {managers.map(

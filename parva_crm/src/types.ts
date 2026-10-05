@@ -194,6 +194,7 @@ export interface SiteVisit {
   leadId: string
   leadName: string
   projectName: string
+  place?: string
   agentId?: string
   agentName?: string
   assignedManagerId?: string
