@@ -1298,6 +1298,8 @@ export default function Messages({
       }))
     } catch (err) {
       console.error('Failed to delete group:', err)
+      setShowDeleteGroupConfirm(false)
+      window.alert(err instanceof Error ? err.message : 'Could not delete the group.')
     } finally {
       setDeletingGroupLoading(false)
     }

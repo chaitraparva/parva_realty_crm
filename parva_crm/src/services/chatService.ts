@@ -713,13 +713,18 @@ export async function deleteMessage(messageId: string, senderId: string): Promis
  * Supabase RLS enforces that only the group creator (or Chaitra if member) can delete.
  */
 export async function deleteGroup(conversationId: string): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('conversations')
     .delete()
     .eq('id', conversationId)
     .eq('type', 'group')
+    .select('id')
 
   throwIfError(error)
+  // RLS silently blocks deletes you are not allowed to do (0 rows, no error).
+  if (!data || data.length === 0) {
+    throw new Error('You do not have permission to delete this group.')
+  }
 }
 
 export type ReactionSignalPayload = {
