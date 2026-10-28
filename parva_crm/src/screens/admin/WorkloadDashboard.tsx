@@ -123,7 +123,7 @@ export default function WorkloadDashboard({ leads, setLeads, onAddAudit, onAddNo
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all"
             style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5' }}
           >
-            <Shuffle size={14} /> AI Lead Distribution
+            <Shuffle size={14} /> Auto Assign
           </button>
         </div>
         <div className="overflow-x-auto">
@@ -197,7 +197,7 @@ export default function WorkloadDashboard({ leads, setLeads, onAddAudit, onAddNo
       </div>
 
       {/* AI Distribution Modal */}
-      <Modal open={showAIModal} onClose={() => { setShowAIModal(false); setAiResult([]) }} title="AI Lead Distribution">
+      <Modal open={showAIModal} onClose={() => { setShowAIModal(false); setAiResult([]) }} title="Auto Assign Leads">
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
             The AI will analyze current workloads and distribute new leads fairly across available agents based on capacity, performance, and current load.
