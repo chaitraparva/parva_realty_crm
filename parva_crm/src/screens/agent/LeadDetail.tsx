@@ -526,7 +526,15 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
             </div>
           )}
           <div className="bg-card rounded-xl border border-border shadow-sm p-6">
-            <h3 className="font-serif text-lg font-semibold text-foreground mb-5">Activity Timeline</h3>
+            <div className="flex items-center justify-between gap-3 mb-5 flex-wrap">
+              <h3 className="font-serif text-lg font-semibold text-foreground">Activity Timeline</h3>
+              <button
+                onClick={() => openLogModal('call')}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg border border-border bg-background hover:bg-muted text-foreground"
+              >
+                📎 Attach proof / screenshot
+              </button>
+            </div>
             {lead.activities.length === 0 ? (
               <p className="text-muted-foreground text-sm py-8 text-center">No activities logged yet. Start with a call or email.</p>
             ) : (
@@ -771,7 +779,7 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
               value={logForm.followUp} onChange={(e) => setLogForm({ ...logForm, followUp: e.target.value })} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1.5">Attach screenshot / proof (optional)</label>
+            <label className="block text-xs font-medium text-muted-foreground mb-1.5">Attach screenshot / proof (call screenshot, recording, PDF)</label>
             <input
               type="file"
               accept="image/*,application/pdf,audio/*,video/*"
