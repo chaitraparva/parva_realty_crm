@@ -3,7 +3,7 @@ import { AlertCircle, CheckCircle, XCircle, MessageSquare, ArrowRight } from 'lu
 import Modal from '../../components/ui/Modal'
 import { useData } from '../../contexts/DataContext'
 import { leadsApi, ApiError } from '../../services/api'
-import type { EscalationRequest, Lead, Notification, AuditEntry } from '../../types'
+import type { EscalationRequest, Lead, Notification, AuditEntry, Role } from '../../types'
 
 interface EscalationAdminProps {
   escalations: EscalationRequest[]
@@ -12,6 +12,9 @@ interface EscalationAdminProps {
   setLeads: React.Dispatch<React.SetStateAction<Lead[]>>
   onAddAudit: (action: string, details: string, prev?: string, next?: string, reason?: string) => void
   onAddNotification: (n: Omit<Notification, 'id' | 'timestamp' | 'read'>) => void
+  role?: Role
+  currentUserId?: string
+  currentUserName?: string
 }
 
 const statusCfg = {
@@ -21,21 +24,27 @@ const statusCfg = {
   rejected: { cls: 'bg-gray-100 text-gray-600', label: 'Rejected' },
 }
 
-export default function EscalationAdmin({ escalations, setEscalations, leads, setLeads, onAddAudit, onAddNotification }: EscalationAdminProps) {
+export default function EscalationAdmin({ escalations, setEscalations, leads, setLeads, onAddAudit, onAddNotification, role = 'admin', currentUserId = '', currentUserName = 'Admin' }: EscalationAdminProps) {
   const { employees } = useData()
   const [activeEsc, setActiveEsc] = useState<EscalationRequest | null>(null)
   const [adminComment, setAdminComment] = useState('')
   const [reassignTo, setReassignTo] = useState('')
   const [actionError, setActionError] = useState('')
 
-  const agents = employees.filter((e) => e.role === 'agent' && e.status === 'active')
+  // Who a lead can be reassigned to: a Lead Acquisition Manager picks from
+  // themselves and their own team; the Super Admin can pick anyone active.
+  const agents = employees.filter((e) =>
+    e.status === 'active' &&
+    e.role !== 'admin' &&
+    (role !== 'acquisition_manager' || e.id === currentUserId || e.managerId === currentUserId)
+  )
   const pending = escalations.filter((e) => e.status === 'pending').length
 
   const resolve = (esc: EscalationRequest, action: 'reassigned' | 'rejected') => {
     setEscalations((prev) =>
       prev.map((e) =>
         e.id === esc.id
-          ? { ...e, status: action, adminComment, resolvedAt: new Date().toISOString().slice(0, 16).replace('T', ' '), resolvedBy: 'Chaitra' }
+          ? { ...e, status: action, adminComment, resolvedAt: new Date().toISOString().slice(0, 16).replace('T', ' '), resolvedBy: currentUserName }
           : e
       )
     )

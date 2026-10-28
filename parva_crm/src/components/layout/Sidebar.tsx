@@ -39,6 +39,7 @@ const navByRole: Record<Role, NavItem[]> = {
     { id: 'team-overview', label: 'Team Overview', icon: <Users size={18} />, section: 'Team' },
     { id: 'pipeline', label: 'Lead Pipeline', icon: <GitBranch size={18} />, section: 'Team' },
     { id: 'source-performance', label: 'Source Performance', icon: <PieChart size={18} />, section: 'Team' },
+    { id: 'escalations', label: 'Escalations', icon: <AlertCircle size={18} />, section: 'Team' },
     { id: 'site-visits', label: 'Site Visits', icon: <CalendarClock size={18} />, section: 'Operations' },
     { id: 'inventory', label: 'Property Inventory', icon: <Building2 size={18} />, section: 'Operations' },
     { id: 'org-chart', label: 'Org & People', icon: <Network size={18} />, section: 'Organisation' },

@@ -108,6 +108,7 @@ const ACQUISITION_BLOCKED_SCREENS = new Set([
 
 export function isScreenPermittedForRole(targetScreen: string, userRole: Role): boolean {
   if (userRole === 'admin') return true
+  if (userRole === 'acquisition_manager' && targetScreen === 'escalations') return true
   if (ADMIN_ONLY_SCREENS.has(targetScreen)) return false
   if (userRole === 'acquisition_manager' && ACQUISITION_BLOCKED_SCREENS.has(targetScreen)) return false
   if (userRole === 'agent' && MANAGER_ONLY_SCREENS.has(targetScreen)) return false
@@ -1094,6 +1095,9 @@ function AuthenticatedApp({
               onAddNotification={
                 addNotification
               }
+              role={role}
+              currentUserId={currentUser.id}
+              currentUserName={currentUser.name}
             />
           )
 

@@ -234,11 +234,11 @@ function EmployeeCard({
             {emp.email || 'No email'}
           </p>
 
-          <p className="text-[10px] font-medium text-accent">
-            {emp.department ||
-              emp.team ||
-              'Sales'}
-          </p>
+          {emp.department && (
+            <p className="text-[10px] font-medium text-accent">
+              {emp.department}
+            </p>
+          )}
 
           {isAgent && (
             <p className="text-xs font-medium text-muted-foreground">
