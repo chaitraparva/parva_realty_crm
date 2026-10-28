@@ -33,6 +33,17 @@ const navByRole: Record<Role, NavItem[]> = {
     { id: 'leave-management', label: 'Leave Management', icon: <CalendarDays size={18} />, section: 'Organisation' },
     { id: 'flags', label: 'Flags & Warnings', icon: <Flag size={18} />, section: 'Compliance' },
   ],
+  acquisition_manager: [
+    { id: 'my-leads', label: 'Leads', icon: <Target size={18} />, section: 'Pipeline' },
+    { id: 'performance', label: 'My Performance', icon: <TrendingUp size={18} />, section: 'Pipeline' },
+    { id: 'team-overview', label: 'Team Overview', icon: <Users size={18} />, section: 'Team' },
+    { id: 'pipeline', label: 'Lead Pipeline', icon: <GitBranch size={18} />, section: 'Team' },
+    { id: 'source-performance', label: 'Source Performance', icon: <PieChart size={18} />, section: 'Team' },
+    { id: 'site-visits', label: 'Site Visits', icon: <CalendarClock size={18} />, section: 'Operations' },
+    { id: 'inventory', label: 'Property Inventory', icon: <Building2 size={18} />, section: 'Operations' },
+    { id: 'org-chart', label: 'Org & People', icon: <Network size={18} />, section: 'Organisation' },
+    { id: 'flags', label: 'Flags & Warnings', icon: <Flag size={18} />, section: 'Compliance' },
+  ],
   admin: [
     { id: 'admin-dashboard', label: 'Company Dashboard', icon: <LayoutDashboard size={18} />, section: 'Overview' },
     { id: 'my-leads', label: 'Leads', icon: <Target size={18} />, section: 'Overview' },
@@ -60,6 +71,7 @@ const sharedItems: NavItem[] = [
 const roleLabels: Record<Role, string> = {
   agent: 'CRM Agent',
   manager: 'Sales Manager',
+  acquisition_manager: 'Lead Acquisition Manager',
   admin: 'Super Admin',
 }
 

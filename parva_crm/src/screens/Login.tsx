@@ -12,6 +12,7 @@ import { authApi, ApiError } from '../services/api'
 const ROLE_CARDS: { id: Role; label: string; sublabel: string }[] = [
   { id: 'agent', label: 'CRM Executive', sublabel: 'Manage leads & client follow-ups' },
   { id: 'manager', label: 'Sales Manager', sublabel: 'Team oversight & lead distribution' },
+  { id: 'acquisition_manager', label: 'Lead Acquisition Manager', sublabel: 'Social media leads & team follow-up' },
   { id: 'admin', label: 'Super Admin', sublabel: 'Full organisation control' },
 ]
 

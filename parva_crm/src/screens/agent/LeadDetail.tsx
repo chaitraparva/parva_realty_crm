@@ -56,6 +56,8 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
   const [followUpDate, setFollowUpDate] = useState(baseLead.followUpDate)
   const [showLogModal, setShowLogModal] = useState(false)
   const [logForm, setLogForm] = useState({ type: 'call' as ActivityType, notes: '', followUp: '' })
+  const [logFile, setLogFile] = useState<File | null>(null)
+  const [uploadingLog, setUploadingLog] = useState(false)
   const [showSignModal, setShowSignModal] = useState(false)
   const [signedAt, setSignedAt] = useState<string | null>(null)
   const [showRescheduleModal, setShowRescheduleModal] = useState(false)
@@ -144,24 +146,66 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
     setShowLogModal(true)
   }
 
-  const submitActivity = () => {
-    if (!logForm.notes.trim()) return
+  const submitActivity = async () => {
+    if (!logForm.notes.trim() || uploadingLog) return
+    setActionError('')
+
+    // Optional proof / screenshot — stored in the private "lead-attachments" bucket.
+    let attachment: { path: string; name: string; type: string } | null = null
+    if (logFile) {
+      if (logFile.size > 10 * 1024 * 1024) {
+        setActionError('That file is larger than 10 MB. Please attach a smaller one.')
+        return
+      }
+      setUploadingLog(true)
+      const safeName = logFile.name.replace(/[^A-Za-z0-9._-]/g, '_')
+      const path = `${lead.id}/${Date.now()}-${safeName}`
+      const { error: uploadError } = await supabase.storage
+        .from('lead-attachments')
+        .upload(path, logFile, { contentType: logFile.type || undefined })
+      setUploadingLog(false)
+      if (uploadError) {
+        setActionError(`Could not upload the file: ${uploadError.message}`)
+        return
+      }
+      attachment = { path, name: logFile.name, type: logFile.type }
+    }
+
     const newActivity = {
       id: `act-${Date.now()}`,
       type: logForm.type,
       description: logForm.notes.trim(),
       timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
       by: currentUserName,
+      attachmentPath: attachment?.path,
+      attachmentName: attachment?.name,
+      attachmentType: attachment?.type,
     }
     setActivities((prev) => [...prev, newActivity])
     if (logForm.followUp) setFollowUpDate(logForm.followUp)
     patchSharedLead({ activities: [...activities, newActivity], followUpDate: logForm.followUp || followUpDate })
-    setActionError('')
-    leadsApi.addActivity(lead.id, { type: logForm.type, description: logForm.notes.trim() })
+    leadsApi.addActivity(lead.id, {
+      type: logForm.type,
+      description: logForm.notes.trim(),
+      attachmentPath: attachment?.path,
+      attachmentName: attachment?.name,
+      attachmentType: attachment?.type,
+    })
       .then(() => { if (logForm.followUp) return leadsApi.update(lead.id, { followUpDate: logForm.followUp }) })
       .catch((err) => reportError(err, 'Could not save this activity — please retry.'))
     setLogForm({ type: 'call', notes: '', followUp: '' })
+    setLogFile(null)
     setShowLogModal(false)
+  }
+
+  // Opens a saved proof/screenshot through a short-lived signed link.
+  const openAttachment = async (path: string) => {
+    const { data, error } = await supabase.storage.from('lead-attachments').createSignedUrl(path, 3600)
+    if (error || !data?.signedUrl) {
+      setActionError('Could not open this file.')
+      return
+    }
+    window.open(data.signedUrl, '_blank', 'noopener')
   }
 
   const submitTransfer = async () => {
@@ -505,6 +549,14 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
                           <span className="text-xs text-muted-foreground">{act.timestamp}</span>
                         </div>
                         <p className="text-sm text-foreground leading-relaxed">{act.description}</p>
+                        {act.attachmentPath && (
+                          <button
+                            onClick={() => void openAttachment(act.attachmentPath as string)}
+                            className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-border bg-background hover:bg-card"
+                          >
+                            📎 {act.attachmentName || 'View attachment'}
+                          </button>
+                        )}
                         <p className="text-xs text-muted-foreground mt-2">— {act.by}</p>
                       </div>
                     </div>
@@ -718,15 +770,25 @@ export default function LeadDetail({ leadId, navigate, onAddNotification, onAddA
             <input type="date" className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
               value={logForm.followUp} onChange={(e) => setLogForm({ ...logForm, followUp: e.target.value })} />
           </div>
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground mb-1.5">Attach screenshot / proof (optional)</label>
+            <input
+              type="file"
+              accept="image/*,application/pdf,audio/*,video/*"
+              onChange={(e) => setLogFile(e.target.files?.[0] ?? null)}
+              className="w-full text-xs text-muted-foreground file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border file:border-border file:bg-muted file:text-xs file:font-medium file:text-foreground"
+            />
+            {logFile && <p className="text-xs text-muted-foreground mt-1.5">{logFile.name}</p>}
+          </div>
           <div className="flex gap-3 pt-2">
-            <button onClick={() => setShowLogModal(false)} className="flex-1 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground">Cancel</button>
+            <button onClick={() => { setShowLogModal(false); setLogFile(null) }} className="flex-1 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground">Cancel</button>
             <button
-              onClick={submitActivity}
-              disabled={!logForm.notes.trim()}
+              onClick={() => void submitActivity()}
+              disabled={!logForm.notes.trim() || uploadingLog}
               className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-opacity"
-              style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: logForm.notes.trim() ? 1 : 0.5 }}
+              style={{ backgroundColor: '#1C2B4A', color: '#FAF8F5', opacity: logForm.notes.trim() && !uploadingLog ? 1 : 0.5 }}
             >
-              Log Activity
+              {uploadingLog ? 'Uploading…' : 'Log Activity'}
             </button>
           </div>
         </div>

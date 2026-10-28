@@ -2377,7 +2377,7 @@ export default function Messages({
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-foreground truncate">{selected.contact.name}</p>
                 <p className="text-xs text-muted-foreground capitalize truncate">
-                  {selected.contact.role === 'admin' ? 'Super Admin' : selected.contact.role === 'manager' ? 'Sales Manager' : 'CRM Agent'} · {selected.contact.team}
+                  {selected.contact.role === 'admin' ? 'Super Admin' : selected.contact.role === 'manager' ? 'Sales Manager' : selected.contact.role === 'acquisition_manager' ? 'Lead Acquisition Manager' : 'CRM Agent'} · {selected.contact.team}
                 </p>
               </div>
               <button

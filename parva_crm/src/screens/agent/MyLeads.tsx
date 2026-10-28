@@ -34,7 +34,10 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
   // everyone) — see DataContext. setAgentLeads applies optimistic local
   // updates that are also persisted via leadsApi below.
   const { leads: agentLeads, setLeads: setAgentLeads, employees } = useData()
-  const canManage = role === 'manager' || role === 'admin'
+  const isAcquisition = role === 'acquisition_manager'
+  const canManage = role === 'manager' || role === 'admin' || isAcquisition
+  // People who report directly to this Lead Acquisition Manager.
+  const myTeam = employees.filter((e) => e.managerId === currentUserId && e.status === 'active')
   const [actionError, setActionError] = useState('')
   const [search, setSearch] = useState('')
   const [sourceFilter, setSourceFilter] = useState<LeadSource | 'All'>('All')
@@ -55,7 +58,7 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
   const [flagSeverity, setFlagSeverity] = useState<'Low' | 'Medium' | 'High'>('Low')
   const [showFilters, setShowFilters] = useState(false)
   const [showNewLeadModal, setShowNewLeadModal] = useState(false)
-  const [newLeadForm, setNewLeadForm] = useState({ name: '', phone: '', email: '', source: 'Referral' as LeadSource, budget: '', propertyType: 'Apartment' as 'Apartment' | 'Villa' | 'Plot', location: '' })
+  const [newLeadForm, setNewLeadForm] = useState({ name: '', phone: '', email: '', source: 'Referral' as LeadSource, assignTo: '', budget: '', propertyType: 'Apartment' as 'Apartment' | 'Villa' | 'Plot', location: '' })
   const [creatingLead, setCreatingLead] = useState(false)
   const [editLeadId, setEditLeadId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ name: '', phone: '', email: '', budget: '', propertyType: 'Apartment' as 'Apartment' | 'Villa' | 'Plot', location: '', notes: '' })
@@ -288,6 +291,9 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
 
       if (role === 'agent') {
         assignedTo = currentUserId || undefined
+      } else if (isAcquisition) {
+        // A Lead Acquisition Manager chooses who in their team gets the lead.
+        assignedTo = newLeadForm.assignTo || undefined
       } else if (settings.autoAssign) {
         const currentEmployee = employees.find(
           (employee) => employee.id === currentUserId
@@ -377,7 +383,8 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
         phone: newLeadForm.phone.trim(),
         email: newLeadForm.email.trim() || undefined,
         source: newLeadForm.source,
-        status: FIRST_STAGE,
+        // Lead Generation is already done for a lead the acquisition manager creates.
+        status: isAcquisition ? 'Initial Approach' : FIRST_STAGE,
         assignedTo,
         budget: newLeadForm.budget.trim() || undefined,
         propertyType: newLeadForm.propertyType,
@@ -394,7 +401,7 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
       onAddAudit?.(
         'Lead Created',
         assignedTo
-          ? `${currentUserName} added "${createdLeadName}" and it was automatically assigned.`
+          ? `${currentUserName} added "${createdLeadName}" and assigned it${isAcquisition ? ` to ${employees.find((e) => e.id === assignedTo)?.name || 'a team member'}` : ' automatically'}.`
           : `${currentUserName} added "${createdLeadName}" with no automatic assignment.`
       )
 
@@ -404,7 +411,8 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
         name: '',
         phone: '',
         email: '',
-        source: 'Referral',
+        source: isAcquisition ? 'Social Media' : 'Referral',
+        assignTo: '',
         budget: '',
         propertyType: 'Apartment',
         location: '',
@@ -731,6 +739,16 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
               <input value={newLeadForm.location} onChange={(e) => setNewLeadForm({ ...newLeadForm, location: e.target.value })} placeholder="e.g. JVC, Dubai" className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
             </div>
           </div>
+          {isAcquisition && (
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1.5">Assign to (your team)</label>
+              <select value={newLeadForm.assignTo} onChange={(e) => setNewLeadForm({ ...newLeadForm, assignTo: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none">
+                <option value="">Keep with me for now</option>
+                {myTeam.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+              </select>
+              <p className="text-xs text-muted-foreground mt-1.5">Lead Generation is already done — the lead starts at the next stage.</p>
+            </div>
+          )}
           <div className="flex gap-3 pt-2">
             <button onClick={() => setShowNewLeadModal(false)} className="flex-1 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Cancel</button>
             <button
@@ -799,8 +817,9 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
             <label className="block text-xs font-medium text-muted-foreground mb-1.5">Employee</label>
             <select value={assignTo} onChange={(e) => setAssignTo(e.target.value)} className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none">
               <option value="">Select an employee…</option>
-              {employees.map((e) => <option key={e.id} value={e.id}>{e.name} ({e.office})</option>)}
+              {(isAcquisition ? employees.filter((e) => e.id === currentUserId || myTeam.some((m) => m.id === e.id)) : employees).map((e) => <option key={e.id} value={e.id}>{e.name} ({e.office})</option>)}
             </select>
+            {isAcquisition && myTeam.length === 0 && <p className="text-xs text-muted-foreground mt-1.5">No one reports to you yet — ask the Super Admin to add your team.</p>}
           </div>
           <div className="flex gap-3 pt-2">
             <button onClick={() => setAssignLeadId(null)} className="flex-1 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Cancel</button>

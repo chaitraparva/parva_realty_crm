@@ -21,6 +21,12 @@ const mobileBottomNav: Record<Role, { id: string; icon: React.ReactNode; label: 
     { id: 'messages', icon: <MessageCircle size={20} />, label: 'Interact' },
     { id: 'notifications', icon: <Bell size={20} />, label: 'Alerts' },
   ],
+  acquisition_manager: [
+    { id: 'my-leads', icon: <Target size={20} />, label: 'Leads' },
+    { id: 'team-overview', icon: <Users size={20} />, label: 'Team' },
+    { id: 'messages', icon: <MessageCircle size={20} />, label: 'Interact' },
+    { id: 'notifications', icon: <Bell size={20} />, label: 'Alerts' },
+  ],
   admin: [
     { id: 'admin-dashboard', icon: <LayoutDashboard size={20} />, label: 'Dashboard' },
     { id: 'workload', icon: <Users size={20} />, label: 'Workload' },

@@ -33,6 +33,11 @@ const roleColors: Record<
     text: '#1C2B4A',
     border: '#C9A96E',
   },
+  acquisition_manager: {
+    bg: 'rgba(201,169,110,0.12)',
+    text: '#1C2B4A',
+    border: '#C9A96E',
+  },
   agent: {
     bg: '#F5F2EC',
     text: '#1C2B4A',
@@ -43,6 +48,7 @@ const roleColors: Record<
 const roleLabels: Record<Role, string> = {
   admin: 'Super Admin',
   manager: 'Sales Manager',
+  acquisition_manager: 'Lead Acquisition Manager',
   agent: 'CRM Agent',
 }
 
@@ -78,6 +84,7 @@ function mapDbEmployee(row: DbEmployee): OrgEmployee {
   const role: Role =
     row.role === 'admin' ||
       row.role === 'manager' ||
+      row.role === 'acquisition_manager' ||
       row.role === 'agent'
       ? row.role
       : 'manager'
@@ -388,9 +395,20 @@ export default function OrgChart({
       (e) => e.role === 'admin'
     ) || null
 
+  // Lead Acquisition Managers lead their own team: the people reporting to
+  // them are drawn under them instead of as separate managers.
+  const acquisitionIds = new Set(
+    employees
+      .filter((e) => e.role === 'acquisition_manager')
+      .map((e) => e.id)
+  )
+
   const managers =
     employees.filter(
-      (e) => e.role === 'manager'
+      (e) =>
+        (e.role === 'manager' &&
+          !(e.managerId && acquisitionIds.has(e.managerId))) ||
+        e.role === 'acquisition_manager'
     )
 
   const bangaloreManagers =
@@ -419,7 +437,8 @@ export default function OrgChart({
     agentsByManager[manager.id] =
       employees.filter(
         (e) =>
-          e.role === 'agent' &&
+          (e.role === 'agent' ||
+            manager.role === 'acquisition_manager') &&
           e.managerId === manager.id
       )
   })

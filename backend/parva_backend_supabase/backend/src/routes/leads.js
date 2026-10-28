@@ -10,7 +10,7 @@ router.get('/:id', protect, asyncHandler(ctrl.getOne))
 router.post('/', protect, asyncHandler(ctrl.create))
 router.patch('/:id', protect, asyncHandler(ctrl.update))
 router.post('/:id/activity', protect, asyncHandler(ctrl.addActivity))
-router.patch('/:id/assign', protect, requireRole('admin', 'manager'), asyncHandler(ctrl.assign))
+router.patch('/:id/assign', protect, requireRole('admin', 'manager', 'acquisition_manager'), asyncHandler(ctrl.assign))
 router.delete('/:id', protect, requireRole('admin'), asyncHandler(ctrl.remove))
 
 module.exports = router

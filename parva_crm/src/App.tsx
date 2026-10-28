@@ -75,6 +75,7 @@ const defaultScreens: Record<
 > = {
   agent: 'my-leads',
   manager: 'team-overview',
+  acquisition_manager: 'team-overview',
   admin: 'admin-dashboard',
 }
 
@@ -96,9 +97,19 @@ const MANAGER_ONLY_SCREENS = new Set([
   'workload',
 ])
 
+// A Lead Acquisition Manager gets no approvals, no AI lead distribution and no
+// leave management (people management).
+const ACQUISITION_BLOCKED_SCREENS = new Set([
+  'approvals',
+  'workload',
+  'leave-management',
+  'payroll-manager',
+])
+
 export function isScreenPermittedForRole(targetScreen: string, userRole: Role): boolean {
   if (userRole === 'admin') return true
   if (ADMIN_ONLY_SCREENS.has(targetScreen)) return false
+  if (userRole === 'acquisition_manager' && ACQUISITION_BLOCKED_SCREENS.has(targetScreen)) return false
   if (userRole === 'agent' && MANAGER_ONLY_SCREENS.has(targetScreen)) return false
   return true
 }
@@ -717,6 +728,10 @@ function AuthenticatedApp({
   const role =
     currentUser.role
 
+  // Screens built for Sales Managers treat a Lead Acquisition Manager the same way.
+  const screenRole: Role =
+    role === 'acquisition_manager' ? 'manager' : role
+
   /*
    * ============================================================
    * ONBOARDING
@@ -967,7 +982,11 @@ function AuthenticatedApp({
 
         case 'team-overview':
           return (
-            <TeamOverview />
+            <TeamOverview
+              role={role}
+              currentUserId={currentUser.id}
+              navigate={navigate}
+            />
           )
 
         case 'pipeline':
@@ -1118,7 +1137,7 @@ function AuthenticatedApp({
         case 'inventory':
           return (
             <Inventory
-              role={role}
+              role={screenRole}
               unitPhotos={
                 unitPhotos
               }
@@ -1131,7 +1150,7 @@ function AuthenticatedApp({
         case 'site-visits':
           return (
             <SiteVisits
-              role={role}
+              role={screenRole}
               visitList={
                 visitList
               }

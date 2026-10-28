@@ -1,4 +1,4 @@
-export type Role = 'agent' | 'manager' | 'admin'
+export type Role = 'agent' | 'manager' | 'acquisition_manager' | 'admin'
 export type Office = 'Bangalore' | 'Dubai'
 export type LeadSource = 'Housing.com' | 'Social Media' | 'Referral' | 'Walk-in'
 export type LeadStatus =
@@ -32,10 +32,14 @@ export interface Activity {
   description: string
   timestamp: string
   by: string
+  attachmentPath?: string
+  attachmentName?: string
+  attachmentType?: string
 }
 
 export interface Lead {
   id: string
+  createdBy?: string
   name: string
   phone: string
   email: string

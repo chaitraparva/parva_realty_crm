@@ -39,12 +39,16 @@ export function mapLead(l: Record<string, any>): Lead {
     description: a.description,
     timestamp: a.timestamp,
     by: a.by || 'Unknown',
+    attachmentPath: a.attachmentPath ?? undefined,
+    attachmentName: a.attachmentName ?? undefined,
+    attachmentType: a.attachmentType ?? undefined,
   }))
   const lastActivity =
     activities.length > 0 ? activities[activities.length - 1].timestamp : (l.updatedAt || l.createdAt || '')
 
   return {
     id: l.id,
+    createdBy: l.createdBy ?? undefined,
     name: l.name,
     phone: l.phone,
     email: l.email || '',

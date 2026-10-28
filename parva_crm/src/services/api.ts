@@ -109,7 +109,7 @@ export const leadsApi = {
 
   update: (id: string, data: unknown) => request<unknown>('PATCH', `/leads/${id}`, data),
 
-  addActivity: (id: string, activity: { type: string; description: string }) =>
+  addActivity: (id: string, activity: { type: string; description: string; attachmentPath?: string; attachmentName?: string; attachmentType?: string }) =>
     request<unknown>('POST', `/leads/${id}/activity`, activity),
 
   assign: (id: string, assignedTo: string) =>
