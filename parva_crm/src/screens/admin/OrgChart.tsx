@@ -234,12 +234,6 @@ function EmployeeCard({
             {emp.email || 'No email'}
           </p>
 
-          {emp.department && (
-            <p className="text-[10px] font-medium text-accent">
-              {emp.department}
-            </p>
-          )}
-
           {isAgent && (
             <p className="text-xs font-medium text-muted-foreground">
               {leadsAssigned} leads
@@ -847,8 +841,7 @@ export default function OrgChart({
                                 </p>
 
                                 <p className="text-xs text-muted-foreground">
-                                  {emp.department ||
-                                    'Sales'}
+                                  {emp.department || ''}
                                 </p>
 
                               </div>
@@ -881,9 +874,7 @@ export default function OrgChart({
                           </td>
 
                           <td className="px-5 py-4 text-sm text-muted-foreground">
-                            {emp.team ||
-                              emp.department ||
-                              'Sales'}
+                            {emp.department || ''}
                           </td>
 
                           <td className="px-5 py-4">
@@ -1095,10 +1086,7 @@ export default function OrgChart({
 
                 <p className="text-sm font-medium text-foreground">
                   {selected.department ||
-                    '—'}{' '}
-                  ·{' '}
-                  {selected.team ||
-                    'Sales'}
+                    '—'}
                 </p>
               </div>
 
