@@ -4,8 +4,6 @@ import {
   ChevronDown,
   Menu,
   Search,
-  Sun,
-  Moon,
   CalendarDays,
   CheckCheck,
   Building2,
@@ -249,14 +247,6 @@ export default function TopBar({
           className="sm:hidden p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
         >
           <Search size={18} />
-        </button>
-
-        <button
-          onClick={onToggleDarkMode}
-          className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-          title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-        >
-          {darkMode ? <Sun size={18} /> : <Moon size={18} />}
         </button>
 
         {/* Bell Button with Notification Dropdown */}

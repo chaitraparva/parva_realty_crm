@@ -1,3 +1,4 @@
+import { getFlagWatcherIds } from '../../services/flagWatchers'
 import { useState, useEffect, useRef } from 'react'
 import { Search, Filter, Plus, Phone, Clock, ChevronRight, AlertTriangle, Flag as FlagIcon, Mail, Pencil, UserCog, Building2 } from 'lucide-react'
 import { useData, mapLead } from '../../contexts/DataContext'
@@ -545,6 +546,10 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
     const flag: Flag = { id: `flag-${Date.now()}`, employeeId: currentUserId, employeeName: currentUserName, type: 'Self-Reported', description: flagReason.trim(), severity: flagSeverity, issuedBy: 'Self', date: new Date().toISOString().slice(0, 10), status: 'Open' }
     setFlagList?.((prev) => [flag, ...prev])
     onAddNotification?.({ type: 'flag', title: 'Flag Raised by Agent', message: `Flag raised: ${flagReason.trim()}`, priority: flagSeverity === 'High' ? 'high' : flagSeverity === 'Medium' ? 'medium' : 'low' })
+    // Also tell the Super Admin and the Lead Acquisition Manager.
+    for (const watcherId of getFlagWatcherIds(employees, [currentUserId])) {
+      onAddNotification?.({ type: 'flag', title: 'Flag Raised', message: `${currentUserName} raised a flag: ${flagReason.trim()}`, priority: flagSeverity === 'High' ? 'high' : flagSeverity === 'Medium' ? 'medium' : 'low', forUserId: watcherId })
+    }
     onAddAudit?.('Flag Raised (Self)', `Flag raised — ${flagReason.trim()}`)
     setFlagReason(''); setFlagSeverity('Low'); setShowFlagModal(false)
   }
@@ -741,10 +746,10 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
           </div>
           {isAcquisition && (
             <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-1.5">Assign to (your team)</label>
+              <label className="block text-xs font-medium text-muted-foreground mb-1.5">Assign to</label>
               <select value={newLeadForm.assignTo} onChange={(e) => setNewLeadForm({ ...newLeadForm, assignTo: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none">
                 <option value="">Keep with me for now</option>
-                {myTeam.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                {employees.filter((e) => e.status === 'active' && e.id !== currentUserId).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
               </select>
               <p className="text-xs text-muted-foreground mt-1.5">Lead Generation is already done — the lead starts at the next stage.</p>
             </div>
@@ -817,9 +822,8 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
             <label className="block text-xs font-medium text-muted-foreground mb-1.5">Employee</label>
             <select value={assignTo} onChange={(e) => setAssignTo(e.target.value)} className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none">
               <option value="">Select an employee…</option>
-              {(isAcquisition ? employees.filter((e) => e.id === currentUserId || myTeam.some((m) => m.id === e.id)) : employees).map((e) => <option key={e.id} value={e.id}>{e.name} ({e.office})</option>)}
+              {employees.filter((e) => e.status === 'active').map((e) => <option key={e.id} value={e.id}>{e.name} ({e.office})</option>)}
             </select>
-            {isAcquisition && myTeam.length === 0 && <p className="text-xs text-muted-foreground mt-1.5">No one reports to you yet — ask the Super Admin to add your team.</p>}
           </div>
           <div className="flex gap-3 pt-2">
             <button onClick={() => setAssignLeadId(null)} className="flex-1 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Cancel</button>

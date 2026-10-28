@@ -1,3 +1,4 @@
+import { getFlagWatcherIds } from '../../services/flagWatchers'
 import { useEffect, useState } from 'react'
 import {
   AlertTriangle,
@@ -533,6 +534,22 @@ export default function Flags({
       forUserId:
         form.employeeId,
     })
+
+    // Every flag also goes to the Super Admin and the Lead Acquisition Manager.
+    for (const watcherId of getFlagWatcherIds(employees, [form.employeeId, currentEmployee.id])) {
+      onAddNotification?.({
+        type: 'flag',
+        title: 'Flag Raised',
+        message: `${form.severity} flag on ${employee?.name || 'employee'} (raised by ${currentEmployee.name}): ${form.description.trim()}`,
+        priority:
+          form.severity === 'High'
+            ? 'high'
+            : form.severity === 'Medium'
+              ? 'medium'
+              : 'low',
+        forUserId: watcherId,
+      })
+    }
 
     onAddAudit?.(
       'Flag Issued',

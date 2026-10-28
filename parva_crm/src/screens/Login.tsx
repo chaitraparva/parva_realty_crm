@@ -11,8 +11,8 @@ import { authApi, ApiError } from '../services/api'
 // can never grant access to that role (see requirement: role security).
 const ROLE_CARDS: { id: Role; label: string; sublabel: string }[] = [
   { id: 'agent', label: 'CRM Executive', sublabel: 'Manage leads & client follow-ups' },
-  { id: 'manager', label: 'Sales Manager', sublabel: 'Team oversight & lead distribution' },
-  { id: 'acquisition_manager', label: 'Lead Acquisition Manager', sublabel: 'Social media leads & team follow-up' },
+  { id: 'manager', label: 'Sales Manager', sublabel: 'Property & lead conversions' },
+  { id: 'acquisition_manager', label: 'Lead Acquisition Manager', sublabel: 'Social media, lead distribution & follow-ups' },
   { id: 'admin', label: 'Super Admin', sublabel: 'Full organisation control' },
 ]
 

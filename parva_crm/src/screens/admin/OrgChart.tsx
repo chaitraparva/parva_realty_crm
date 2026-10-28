@@ -19,6 +19,11 @@ import {
   getCapacityPct,
 } from '../../utils/aiAssignment'
 
+// Department label shown on org cards/lists. The Lead Acquisition Manager shows
+// nothing; everyone else shows their department (falling back to "Sales").
+const deptLabel = (emp: { role: Role; department?: string | null; team?: string | null }) =>
+  emp.role === 'acquisition_manager' ? '' : emp.department || emp.team || 'Sales'
+
 const roleColors: Record<
   Role,
   { bg: string; text: string; border: string }
@@ -233,6 +238,12 @@ function EmployeeCard({
             <Mail size={10} />
             {emp.email || 'No email'}
           </p>
+
+          {deptLabel(emp) && (
+            <p className="text-[10px] font-medium text-accent">
+              {deptLabel(emp)}
+            </p>
+          )}
 
           {isAgent && (
             <p className="text-xs font-medium text-muted-foreground">
@@ -841,7 +852,7 @@ export default function OrgChart({
                                 </p>
 
                                 <p className="text-xs text-muted-foreground">
-                                  {emp.department || ''}
+                                  {deptLabel(emp)}
                                 </p>
 
                               </div>
@@ -874,7 +885,7 @@ export default function OrgChart({
                           </td>
 
                           <td className="px-5 py-4 text-sm text-muted-foreground">
-                            {emp.department || ''}
+                            {deptLabel(emp)}
                           </td>
 
                           <td className="px-5 py-4">
@@ -1086,7 +1097,7 @@ export default function OrgChart({
 
                 <p className="text-sm font-medium text-foreground">
                   {selected.department ||
-                    '—'}
+                    '—'}{deptLabel(selected) ? ` · ${deptLabel(selected)}` : ''}
                 </p>
               </div>
 

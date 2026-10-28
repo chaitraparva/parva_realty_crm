@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RotateCcw, Bell, Moon, Loader2 } from 'lucide-react'
+import { RotateCcw, Bell, Loader2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 const DEFAULTS = {
@@ -179,10 +179,6 @@ export default function Settings({
         setNotifPayroll(row.notif_payroll)
         setNotifLeave(row.notif_leave)
 
-        // Sync saved dark mode with App state
-        if (row.dark_mode !== darkMode) {
-          onToggleDarkMode?.()
-        }
       } catch (err) {
         console.error('Could not load employee settings:', err)
 
@@ -341,44 +337,6 @@ export default function Settings({
           {error}
         </div>
       )}
-
-      <div className="bg-card rounded-xl border border-border shadow-sm">
-        <div className="p-5 border-b border-border flex items-center gap-3">
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center"
-            style={{ backgroundColor: 'rgba(201,169,110,0.12)' }}
-          >
-            <Moon size={16} className="text-accent" />
-          </div>
-
-          <div>
-            <h3 className="font-serif text-base font-semibold text-foreground">
-              Appearance
-            </h3>
-            <p className="text-xs text-muted-foreground">
-              Choose how Parva CRM looks on this device
-            </p>
-          </div>
-        </div>
-
-        <div className="p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-foreground">
-                Dark Mode
-              </p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Switch to a dark color scheme
-              </p>
-            </div>
-
-            <Toggle
-              value={darkMode}
-              onChange={() => onToggleDarkMode?.()}
-            />
-          </div>
-        </div>
-      </div>
 
       <div className="bg-card rounded-xl border border-border shadow-sm">
         <div className="p-5 border-b border-border flex items-center gap-3">

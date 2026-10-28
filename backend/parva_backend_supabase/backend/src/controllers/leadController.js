@@ -138,13 +138,6 @@ exports.create = async (req, res) => {
     follow_up_date: b.followUpDate || null,
     notes: b.notes || null,
   }
-  // Anyone but an agent/employee creating for themselves must be allowed to hand the lead on.
-  if (req.user.role === 'acquisition_manager' && row.assigned_to && row.assigned_to !== req.user.id) {
-    const ids = await teamIds(req.user.id)
-    if (!ids.includes(row.assigned_to)) {
-      return res.status(403).json({ message: 'You can only assign leads to people in your team' })
-    }
-  }
   const { data, error } = await supabaseAdmin.from('leads').insert(row).select(SELECT).single()
   if (error) return res.status(400).json({ message: error.message })
 
@@ -238,11 +231,8 @@ exports.assign = async (req, res) => {
     return res.status(403).json({ message: 'Access denied' })
   }
   if (req.user.role === 'acquisition_manager') {
-    // Can only hand leads to themselves or to people who report to them.
-    const ids = await teamIds(req.user.id)
-    if (assignee.id !== req.user.id && !ids.includes(assignee.id)) {
-      return res.status(403).json({ message: 'You can only assign leads to people in your team' })
-    }
+    // A Lead Acquisition Manager may hand a lead to anyone (including the Super
+    // Admin), but only a lead they can already see.
     if (!(await canAccessLead(req.user, existing))) {
       return res.status(403).json({ message: 'Access denied' })
     }

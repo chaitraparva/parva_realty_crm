@@ -272,7 +272,8 @@ function AuthenticatedApp({
 
         if (!active || !data) return
 
-        setDarkMode(Boolean(data.dark_mode))
+        // Dark mode has been removed — the app is always light.
+        setDarkMode(false)
       } catch (err) {
         console.error(
           'Failed to load employee settings:',
@@ -521,9 +522,13 @@ function AuthenticatedApp({
       'read'
     >
   ) => {
+    // forUserId is the intended recipient; without it the alert is for the
+    // person who triggered it.
     const recipientId =
       (n as Notification)
         .recipientId ||
+      (n as Notification)
+        .forUserId ||
       currentUser.id
 
     const notification: Notification =
@@ -543,12 +548,15 @@ function AuthenticatedApp({
       read: false,
     }
 
-    setNotifs(
-      (prev) => [
-        notification,
-        ...prev,
-      ]
-    )
+    // Only show it in this browser if it is for the logged-in user.
+    if (recipientId === currentUser.id) {
+      setNotifs(
+        (prev) => [
+          notification,
+          ...prev,
+        ]
+      )
+    }
 
     void supabase
       .from('notifications')
@@ -585,14 +593,16 @@ function AuthenticatedApp({
               error.message
             )
 
-            setNotifs(
-              (prev) =>
-                prev.filter(
-                  (item) =>
-                    item.id !==
-                    notification.id
-                )
-            )
+            if (recipientId === currentUser.id) {
+              setNotifs(
+                (prev) =>
+                  prev.filter(
+                    (item) =>
+                      item.id !==
+                      notification.id
+                  )
+              )
+            }
           }
         }
       )
