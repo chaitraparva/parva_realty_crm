@@ -76,10 +76,12 @@ async function canAccessLead(user, lead) {
   return false
 }
 
-async function scopedQuery(user) {
+// Must stay synchronous: a Supabase query builder is a thenable, so returning it
+// from an async function would run the query instead of handing back the builder.
+function scopedQuery(user, acquisitionOr) {
   let q = supabaseAdmin.from('leads').select(SELECT)
   if (user.role === 'agent') q = q.eq('assigned_to', user.id)
-  else if (user.role === 'acquisition_manager') q = q.or(await acquisitionFilter(user))
+  else if (user.role === 'acquisition_manager') q = q.or(acquisitionOr)
   // A manager sees their own office's leads, plus any lead they transferred to
   // another office (so Bangalore can still see its Dubai hand-overs).
   else if (user.role === 'manager') q = q.or(`office_id.eq.${user.officeId},transferred_from.eq.${user.id}`)
@@ -88,7 +90,8 @@ async function scopedQuery(user) {
 
 // GET /api/leads — scoped by role, filterable by status/source/office
 exports.list = async (req, res) => {
-  let q = (await scopedQuery(req.user)).order('created_at', { ascending: false })
+  const acquisitionOr = req.user.role === 'acquisition_manager' ? await acquisitionFilter(req.user) : null
+  let q = scopedQuery(req.user, acquisitionOr).order('created_at', { ascending: false })
 
   const { status, source, office } = req.query
   if (status) q = q.eq('status', status)
