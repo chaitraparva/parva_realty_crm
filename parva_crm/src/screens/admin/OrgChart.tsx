@@ -20,9 +20,9 @@ import {
 } from '../../utils/aiAssignment'
 
 // Department label shown on org cards/lists. The Lead Acquisition Manager shows
-// nothing; everyone else shows their department (falling back to "Sales").
+// his role there; everyone else shows their department (falling back to "Sales").
 const deptLabel = (emp: { role: Role; department?: string | null; team?: string | null }) =>
-  emp.role === 'acquisition_manager' ? '' : emp.department || emp.team || 'Sales'
+  emp.role === 'acquisition_manager' ? 'Lead Acquisition Manager' : emp.department || emp.team || 'Sales'
 
 const roleColors: Record<
   Role,
