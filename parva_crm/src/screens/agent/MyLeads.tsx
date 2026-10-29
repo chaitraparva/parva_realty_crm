@@ -748,7 +748,7 @@ export default function MyLeads({ navigate, setFlagList, onAddNotification, onAd
             <div>
               <label className="block text-xs font-medium text-muted-foreground mb-1.5">Assign to</label>
               <select value={newLeadForm.assignTo} onChange={(e) => setNewLeadForm({ ...newLeadForm, assignTo: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none">
-                <option value="">Keep with me for now</option>
+                <option value="">{currentUserName}</option>
                 {employees.filter((e) => e.status === 'active' && e.id !== currentUserId).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
               </select>
               <p className="text-xs text-muted-foreground mt-1.5">Lead Generation is already done — the lead starts at the next stage.</p>

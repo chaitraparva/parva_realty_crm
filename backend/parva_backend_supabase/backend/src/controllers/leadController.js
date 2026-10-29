@@ -66,7 +66,11 @@ async function acquisitionFilter(user) {
 async function canAccessLead(user, lead) {
   if (user.role === 'admin') return true
   if (user.role === 'agent') return lead.assigned_to === user.id
-  if (user.role === 'manager') return lead.office_id === user.officeId
+  // A Sales Manager only sees leads that are theirs: assigned to them, created by
+  // them, or handed over by them to another office (e.g. Dubai transfers).
+  if (user.role === 'manager') {
+    return lead.assigned_to === user.id || lead.created_by === user.id || lead.transferred_from === user.id
+  }
   if (user.role === 'acquisition_manager') {
     if (lead.created_by === user.id || lead.assigned_to === user.id) return true
     if (!lead.assigned_to) return false
@@ -82,9 +86,10 @@ function scopedQuery(user, acquisitionOr) {
   let q = supabaseAdmin.from('leads').select(SELECT)
   if (user.role === 'agent') q = q.eq('assigned_to', user.id)
   else if (user.role === 'acquisition_manager') q = q.or(acquisitionOr)
-  // A manager sees their own office's leads, plus any lead they transferred to
-  // another office (so Bangalore can still see its Dubai hand-overs).
-  else if (user.role === 'manager') q = q.or(`office_id.eq.${user.officeId},transferred_from.eq.${user.id}`)
+  // A Sales Manager sees only their own leads: assigned to them, created by them,
+  // or transferred by them to another office (so Bangalore can still follow its
+  // Dubai hand-overs).
+  else if (user.role === 'manager') q = q.or(`assigned_to.eq.${user.id},created_by.eq.${user.id},transferred_from.eq.${user.id}`)
   return q
 }
 
@@ -160,7 +165,7 @@ exports.create = async (req, res) => {
 // PATCH /api/leads/:id
 exports.update = async (req, res) => {
   const { data: existing, error: findError } = await supabaseAdmin
-    .from('leads').select('id, assigned_to, office_id, created_by').eq('id', req.params.id).maybeSingle()
+    .from('leads').select('id, assigned_to, office_id, created_by, transferred_from').eq('id', req.params.id).maybeSingle()
   if (findError) return res.status(500).json({ message: findError.message })
   if (!existing) return res.status(404).json({ message: 'Lead not found' })
 
@@ -224,10 +229,10 @@ exports.assign = async (req, res) => {
   }
 
   const { data: existing, error: findError } = await supabaseAdmin
-    .from('leads').select('id, name, office_id, assigned_to, created_by').eq('id', req.params.id).maybeSingle()
+    .from('leads').select('id, name, office_id, assigned_to, created_by, transferred_from').eq('id', req.params.id).maybeSingle()
   if (findError) return res.status(500).json({ message: findError.message })
   if (!existing) return res.status(404).json({ message: 'Lead not found' })
-  if (req.user.role === 'manager' && existing.office_id !== req.user.officeId) {
+  if (req.user.role === 'manager' && !(await canAccessLead(req.user, existing))) {
     return res.status(403).json({ message: 'Access denied' })
   }
   if (req.user.role === 'acquisition_manager') {
