@@ -154,6 +154,26 @@ exports.create = async (req, res) => {
     })
     if (notifError) console.error('Failed to create assignment notification:', notifError.message)
   }
+  // Tell every Lead Acquisition Manager about leads added by anyone else.
+  if (req.user.role !== 'acquisition_manager') {
+    const { data: acqs } = await supabaseAdmin
+      .from('employees').select('id').eq('role', 'acquisition_manager').neq('status', 'inactive')
+    const rows = (acqs || [])
+      .filter((a) => a.id !== row.assigned_to)
+      .map((a) => ({
+        id: require('crypto').randomUUID(),
+        employee_id: a.id,
+        type: 'new-lead',
+        title: 'New lead added',
+        message: `${req.user.name} added a new lead: ${row.name}.`,
+        is_read: false,
+        link: `lead-detail:${data.id}`,
+      }))
+    if (rows.length) {
+      const { error: acqError } = await supabaseAdmin.from('notifications').insert(rows)
+      if (acqError) console.error('Failed to notify acquisition managers:', acqError.message)
+    }
+  }
   res.status(201).json(toPublic(data))
 }
 
