@@ -71,12 +71,8 @@ async function canAccessLead(user, lead) {
   if (user.role === 'manager') {
     return lead.assigned_to === user.id || lead.created_by === user.id || lead.transferred_from === user.id
   }
-  if (user.role === 'acquisition_manager') {
-    if (lead.created_by === user.id || lead.assigned_to === user.id) return true
-    if (!lead.assigned_to) return false
-    const ids = await teamIds(user.id)
-    return ids.includes(lead.assigned_to)
-  }
+  // A Lead Acquisition Manager follows up on every lead in the company.
+  if (user.role === 'acquisition_manager') return true
   return false
 }
 
@@ -85,8 +81,7 @@ async function canAccessLead(user, lead) {
 function scopedQuery(user, acquisitionOr) {
   let q = supabaseAdmin.from('leads').select(SELECT)
   if (user.role === 'agent') q = q.eq('assigned_to', user.id)
-  else if (user.role === 'acquisition_manager') q = q.or(acquisitionOr)
-  // A Sales Manager sees only their own leads: assigned to them, created by them,
+    // A Sales Manager sees only their own leads: assigned to them, created by them,
   // or transferred by them to another office (so Bangalore can still follow its
   // Dubai hand-overs).
   else if (user.role === 'manager') q = q.or(`assigned_to.eq.${user.id},created_by.eq.${user.id},transferred_from.eq.${user.id}`)
